@@ -65,8 +65,16 @@
 
   var SOUNDS = {
     tap:      function () { tone(520, 0.09, 'triangle', 0.28, 0, 780); },
-    slide:    function () { noise(0.16, 0.22, 0, 900, 2600, 1.4); tone(300, 0.14, 'sine', 0.16, 0, 620); },
-    pop:      function () { tone(660, 0.07, 'triangle', 0.3, 0, 990); },
+    /* soft whoosh: rising filtered noise + a rising pitch sweep */
+    slide:    function () {
+      noise(0.24, 0.30, 0, 420, 2600, 1.3);
+      tone(220, 0.24, 'sine', 0.16, 0.01, 780);
+    },
+    /* tiny pop when the arrow leaves the board */
+    pop:      function () {
+      tone(940, 0.06, 'triangle', 0.26, 0, 1480);
+      noise(0.04, 0.10, 0, 1800, 3200, 1.5);
+    },
     error:    function () { tone(210, 0.16, 'square', 0.16, 0, 120); noise(0.12, 0.1, 0, 500, 200, 1); },
     heart:    function () { tone(150, 0.22, 'sawtooth', 0.14, 0, 70); },
     win:      function () {

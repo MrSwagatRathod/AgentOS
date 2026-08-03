@@ -21,6 +21,9 @@ Or just open `index.html` directly in a browser.
 - ✅ Core rules: tap an arrow → it slides out if its path to the edge is clear; blocked tap = lose a heart (5/level)
 - ✅ Hearts, hints (highlight safe arrow + its red path), undo (3/level), restart, next level
 - ✅ Win/lose flows, level select with progress + stars
+- ✅ **Premium exit animation stack** (~300 ms per move): tap-scale 1.0→1.1 (55 ms select) → squash & stretch launch → ease-in-cubic acceleration (240 ms) → motion-blur ghosts + soft shadow + fading particle trail → pop burst on exit → micro camera shake + haptic tick → newly-unlocked arrows **glow & pulse once** (chain-reaction feedback)
+- ✅ Haptics (navigator.vibrate): tick on remove, strong buzz on wrong tap, pattern on win
+- ✅ Sounds: soft "whoosh" on launch, "pop" on exit, error/heart-loss/win/undo/hint (all synthesized)
 - ✅ Canvas rendering with juice: slide animations, particles, screen shake, red flash, win confetti
 - ✅ Synthesized WebAudio sounds (no audio files), mute toggle
 - ✅ Touch + mouse + keyboard (H hint · U undo · R restart · M sound · T theme)
