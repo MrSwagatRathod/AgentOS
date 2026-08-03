@@ -1,6 +1,6 @@
-/* Node smoke test — drives the REAL engine with a mocked DOM/canvas.
- * Verifies: boot, long-arrow level build, tap/remove, undo, hearts, hint,
- * win/lose transitions, persistence. Run: node test/game.smoke.test.js
+/* Node smoke test — drives the REAL game code with a mocked DOM/canvas.
+ * Verifies: boot, level build, tap logic, hearts, undo, hint, win/lose
+ * transitions, persistence. Run: node test/game.smoke.test.js
  */
 'use strict';
 const fs = require('fs');
@@ -20,27 +20,42 @@ function makeClassList(el) {
     contains: (c) => el._cls.has(c)
   };
 }
+
 function makeEl(id) {
   const el = {
-    id, _cls: new Set(), textContent: '', innerHTML: '', children: [],
-    style: {}, dataset: {}, listeners: {},
+    id,
+    _cls: new Set(),
+    textContent: '',
+    innerHTML: '',
+    children: [],
+    style: {},
+    dataset: {},
+    listeners: {},
     addEventListener(type, fn) { (el.listeners[type] = el.listeners[type] || []).push(fn); },
-    removeEventListener() {}, getAttribute() { return null; }, setAttribute() {},
+    removeEventListener() {},
+    getAttribute() { return null; },
+    setAttribute() {},
     querySelectorAll() { return []; },
     getBoundingClientRect() { return { left: 0, top: 0, width: 400, height: 700 }; }
   };
   el.classList = makeClassList(el);
   return el;
 }
-const elements = {};
-const getEl = (id) => (elements[id] || (elements[id] = makeEl(id)));
 
+const elements = {};
+function getEl(id) {
+  if (!elements[id]) elements[id] = makeEl(id);
+  return elements[id];
+}
+
+/* canvas element with proxy 2D context */
 const canvas = makeEl('board');
 const ctx = new Proxy({}, {
   get(t, p) {
     if (p === 'createLinearGradient' || p === 'createRadialGradient') return () => ({ addColorStop() {} });
     if (p === 'measureText') return () => ({ width: 0 });
     if (p === 'canvas') return canvas;
+    if (p === 'getImageData') return () => ({ data: new Uint8ClampedArray(4) });
     if (typeof p === 'string' && !(p in t)) return () => {};
     return t[p];
   },
@@ -48,8 +63,9 @@ const ctx = new Proxy({}, {
 });
 canvas.getContext = () => ctx;
 canvas.parentElement = { clientWidth: 420, clientHeight: 760 };
-elements['board'] = canvas;
+elements['board'] = canvas; /* document.getElementById('board') must return this */
 
+/* localStorage */
 const storage = new Map();
 const localStorageMock = {
   getItem: (k) => (storage.has(k) ? storage.get(k) : null),
@@ -57,6 +73,7 @@ const localStorageMock = {
   removeItem: (k) => storage.delete(k)
 };
 
+/* animation frames driver */
 let frameIndex = 0;
 const rafQueue = [];
 function raf(fn) { rafQueue.push(fn); return rafQueue.length; }
@@ -68,12 +85,17 @@ function runFrames(n, stepMs = 16) {
   }
 }
 
+/* --------------- sandbox --------------- */
+const windowObj = {
+  addEventListener() {},
+  removeEventListener() {}
+};
 const sandbox = {
-  window: { addEventListener() {}, removeEventListener() {}, devicePixelRatio: 2 },
-  globalThis: null,
+  window: windowObj,
+  globalThis: null, /* set below */
   document: {
     readyState: 'complete',
-    documentElement: { attrs: { 'data-theme': 'light' }, getAttribute(k) { return this.attrs[k] || null; }, setAttribute(k, v) { this.attrs[k] = v; } },
+    documentElement: { attrs: { 'data-theme': 'dark' }, getAttribute(k) { return this.attrs[k] || null; }, setAttribute(k, v) { this.attrs[k] = v; } },
     getElementById: getEl,
     querySelectorAll: () => [],
     addEventListener() {},
@@ -88,200 +110,172 @@ const sandbox = {
   console
 };
 sandbox.globalThis = sandbox;
-sandbox.window.navigator = sandbox.navigator;
+sandbox.window.window = windowObj;
 sandbox.window.document = sandbox.document;
+sandbox.window.navigator = sandbox.navigator;
 sandbox.window.localStorage = localStorageMock;
 sandbox.window.performance = sandbox.performance;
 sandbox.window.requestAnimationFrame = raf;
+sandbox.window.cancelAnimationFrame = () => {};
 sandbox.window.setTimeout = setTimeout;
 sandbox.window.clearTimeout = clearTimeout;
+sandbox.window.AudioContext = undefined;
+sandbox.window.webkitAudioContext = undefined;
 
 vm.createContext(sandbox);
-for (const f of ['puzzle.js', 'difficulty.js', 'hints.js', 'renderer.js', 'audio.js', 'engine.js', 'ui.js']) {
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8'), sandbox, { filename: f });
+const files = ['levels.js', 'audio.js', 'game.js', 'ui.js'];
+for (const f of files) {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8');
+  vm.runInContext(src, sandbox, { filename: f });
 }
+/* mirror window.AO onto the context global object so bare `AO` identifiers
+ * resolve at runtime — exactly like a browser global. Then boot main.js. */
 sandbox.AO = sandbox.window.AO;
-vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'game.js'), 'utf8'), sandbox, { filename: 'game.js' });
-vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8'), sandbox, { filename: 'main.js' });
+vm.runInContext(
+  fs.readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8'),
+  sandbox, { filename: 'main.js' }
+);
 
 const AO = sandbox.window.AO;
-const P = AO.Puzzle;
+const L = AO.Levels;
 
 let failures = 0;
 function check(name, cond, extra) {
   if (cond) console.log('  ✔ ' + name);
   else { failures++; console.error('  ✘ ' + name + (extra ? ' — ' + extra : '')); }
 }
-
-function removableIds() {
-  return AO.Game.debugRemovable();
-}
-function tapArrow(id) {
+function tapRemovable() {
   const S = AO.Game.getState();
-  const a = S.puzzle.arrows[id];
-  AO.Game.tapCell(a.cells[0].x, a.cells[0].y);
+  const list = L.removableArrows(S.grid, S.size);
+  if (!list.length) return false;
+  AO.Game.tapCell(list[0].x, list[0].y);
+  return true;
 }
-function blockedIds() {
+function findBlockedCell() {
   const S = AO.Game.getState();
-  const rem = new Set(removableIds());
-  return S.puzzle.arrows.filter((a) => !rem.has(a.id) && S.live[a.id].onBoard && S.live[a.id].state === 'idle').map((a) => a.id);
+  for (let y = 0; y < S.size; y++)
+    for (let x = 0; x < S.size; x++)
+      if (S.grid[y][x] !== -1 && !L.pathClear(S.grid, S.size, x, y, S.grid[y][x])) return { x, y };
+  return null;
 }
 
-console.log('Game smoke test — long-arrow engine with mocked DOM/canvas...\n');
-runFrames(5);
+console.log('Game smoke test — booting real code with mocked DOM/canvas...\n');
 
-check('modules booted (AO populated)', !!(AO.Game && AO.Engine && AO.Puzzle && AO.Renderer && AO.Hints && AO.Store && AO.UI));
-check('boot auto-starts Main Route level 1', (() => {
-  const s = AO.Game.getState();
-  return s.phase === 'playing' && s.mode === 'main' && s.level === 1;
-})());
-check('MAX_HEARTS = 3 (ArrowsGo style)', AO.Game.MAX_HEARTS === 3);
+// boot should have happened synchronously (readyState === 'complete')
+check('AO namespace populated', !!(AO && AO.Game && AO.UI && AO.Store && AO.Sound && AO.Levels));
+check('boot: UI.init ran (start screen visible)', getEl('screen-start').classList.contains('hidden') === false);
+check('boot: default theme light', sandbox.document.documentElement.attrs['data-theme'] === 'light');
+
+// menu phase renders the demo board without throwing
 runFrames(10);
 check('menu frames render without throwing', true);
 
 // --- Level 1 playthrough ---
-AO.Game.startLevel(1, 'main');
+AO.Game.startLevel(1);
 {
   const S = AO.Game.getState();
   check('startLevel(1) -> playing', S.phase === 'playing');
-  check('level badge updated', getEl('level-badge').textContent === 'Level 1');
-  check('3 hearts', S.hearts === 3);
-  check('timer shows 05:00', getEl('time-val').textContent === '05:00');
-  check('puzzle has long arrows (multi-cell paths)', (() => {
-    for (const a of S.puzzle.arrows) if (a.length >= 3) return true;
-    return false;
-  })());
-  const total = S.total;
-  check('total arrows >= 2', total >= 2);
+  check('HUD updated (level badge)', getEl('level-badge').textContent === 'Level 1');
+  check('5 hearts shown', S.hearts === 5);
+  check('board size 3, shape rect', S.size === 3 && S.shape === 'rect');
+  const total = L.countArrows(S.grid);
+  check('level 1 has arrows (' + total + ')', total >= 2 && total <= 9);
 
-  // remove the first removable arrow
-  const rem = removableIds();
-  check('at least one removable arrow at start', rem.length >= 1);
-  tapArrow(rem[0]);
-  const S2 = AO.Game.getState();
-  check('removed count increments', S2.removedCount === 1);
-  check('undo stack recorded', S2.undoStack.length === 1);
-  runFrames(30); // let the slide finish (~300ms)
-  check('arrow exited (onBoard false)', (() => {
-    const s = AO.Game.getState();
-    return !s.live[rem[0]].onBoard;
-  })());
+  // tap a removable arrow
+  const first = L.removableArrows(S.grid, S.size)[0];
+  AO.Game.tapCell(first.x, first.y);
+  check('removable tap removes arrow', S.removed === 1 && S.grid[first.y][first.x] === -1);
+  check('undo stack recorded', S.undoStack.length === 1);
+  runFrames(40); // let the slide animation finish
+  check('slide anim completes -> cell gone', S.cells[first.y][first.x].state === 'gone');
 
-  // undo
+  // undo restores it (animated slide-back)
   AO.Game.undo();
-  check('undo restores arrow to board', (() => {
-    const s = AO.Game.getState();
-    return s.live[rem[0]].onBoard && s.removedCount === 0;
-  })());
-  runFrames(20);
+  check('undo restores arrow', S.grid[first.y][first.x] === first.dir && S.removed === 0);
+  runFrames(25); /* let the slide-back animation finish (220 ms) */
+
+  // tap a blocked arrow -> heart lost
+  const blocked = findBlockedCell();
+  if (blocked) {
+    AO.Game.tapCell(blocked.x, blocked.y);
+    check('blocked tap costs a heart', S.hearts === 4);
+    check('blocked arrow stays on board', S.grid[blocked.y][blocked.x] !== -1);
+  } else {
+    console.log('  (no blocked cell in level 1 — skipping blocked-tap assertion)');
+  }
 
   // hint
-  const hintsBefore = AO.Game.getState().hintsLeft;
+  const hintsBefore = S.hintsLeft;
   AO.Game.hint();
-  check('hint consumes one hint', AO.Game.getState().hintsLeft === hintsBefore - 1);
-  check('hint arrow set', AO.Game.getState().hintArrowId != null);
-
-  // wrong tap loses a heart
-  const blocked = blockedIds();
-  if (blocked.length) {
-    tapArrow(blocked[0]);
-    check('blocked tap costs a heart', AO.Game.getState().hearts === 2);
-    check('blocked arrow stays', (() => {
-      const s = AO.Game.getState();
-      return s.live[blocked[0]].onBoard;
-    })());
-  } else {
-    console.log('  (no blocked arrow in level 1 — skipping wrong-tap assertion)');
-  }
+  check('hint consumes one hint', S.hintsLeft === hintsBefore - 1);
+  check('hint highlights a removable arrow', !!S.hintArrow);
 
   // clear the board
   let guard = 0;
-  while (AO.Game.getState().phase === 'playing' && guard++ < 200) {
-    const ids = removableIds();
-    if (!ids.length) break;
-    tapArrow(ids[0]);
-    runFrames(22);
+  while (S.phase === 'playing' && guard++ < 100) {
+    if (!tapRemovable()) break; /* board empty — win transition fires below */
+    runFrames(30);
   }
-  runFrames(30);
-  const S3 = AO.Game.getState();
-  check('board cleared (win)', S3.phase === 'won' && S3.removedCount === S3.total);
-  check('store: level advanced', (AO.Store.data.level || 0) >= 2);
+  runFrames(50); /* let the win transition fire after the last slide (0.54s) */
+  check('all arrows removed', S.removed === S.total, S.removed + ' / ' + S.total);
+  check('board cleared (win phase reached)', S.phase === 'won');
+  check('store: level advanced to 2', (AO.Store.data.level || 0) >= 2);
+  check('store: stars recorded for level 1', (AO.Store.data.stars[1] || 0) >= 1);
   check('win overlay shown', getEl('overlay-win').classList.contains('hidden') === false);
 }
 
-// --- Level 2, force a loss ---
-AO.Game.startLevel(2, 'main');
+// --- Level 2, then force a loss ---
+AO.Game.startLevel(2);
 {
   const S = AO.Game.getState();
-  check('startLevel(2) resets state (hearts 3, hints 3, undo 0)',
-    S.hearts === 3 && S.hintsLeft === 3 && S.undoStack.length === 0 && S.phase === 'playing');
+  check('startLevel(2) resets state (hearts 5, undo 0, hints 3)',
+    S.hearts === 5 && S.undoStack.length === 0 && S.hintsLeft === 3 && S.phase === 'playing');
 
-  // drain hearts via wrong taps
+  // drain hearts: set to 1, tap blocked arrows
+  S.hearts = 1;
   let lost = false;
-  for (let i = 0; i < 8 && !lost; i++) {
-    const b = blockedIds();
-    if (!b.length) break;
-    tapArrow(b[0]);
-    runFrames(45);
-    if (AO.Game.getState().phase === 'lost') lost = true;
+  for (let i = 0; i < 6 && S.phase === 'playing'; i++) {
+    const b = findBlockedCell();
+    if (!b) break;
+    AO.Game.tapCell(b.x, b.y);
+    runFrames(60);
+    if (S.phase === 'lost') { lost = true; break; }
   }
-  check('loss reached when hearts hit 0', lost);
+  check('loss phase reached when hearts hit 0', lost && S.phase === 'lost');
   check('lose overlay shown', getEl('overlay-lose').classList.contains('hidden') === false);
 
+  // retry from the lose screen
   AO.Game.restartLevel();
-  const S2 = AO.Game.getState();
-  check('retry restarts same level', S2.phase === 'playing' && S2.hearts === 3 && S2.level === 2);
+  check('retry restarts same level', S.phase === 'playing' && S.hearts === 5 && S.level === 2);
 }
 
-// --- nextLevel & home ---
+// --- nextLevel & menu ---
 {
   AO.Game.nextLevel();
-  check('nextLevel -> level 3', AO.Game.getState().level === 3);
-  AO.Game.goMenu();
-  const s = AO.Game.getState();
-  check('goMenu returns to Main Route level 1', s.phase === 'playing' && s.mode === 'main' && s.level === 1);
-}
-
-// --- modes ---
-{
-  AO.Game.switchMode('random');
-  const s1 = AO.Game.getState();
-  check('switchMode(random) -> random playing', s1.mode === 'random' && s1.phase === 'playing' && s1.level >= 1 && s1.level <= 700);
-  AO.Game.switchMode('challenge');
-  const s2 = AO.Game.getState();
-  check('switchMode(challenge) -> challenge playing, timer enabled',
-    s2.mode === 'challenge' && s2.timerEnabled && s2.timerLeft <= 300);
-  check('challenge timer counts down', (() => {
-    const before = AO.Game.getState().timerLeft;
-    runFrames(30); // ~0.5s
-    const after = AO.Game.getState().timerLeft;
-    return after < before && after > 0;
-  })());
-  AO.Game.switchMode('main');
-}
-
-// --- settings toggles ---
-{
-  AO.Game.setHintsEnabled(false);
   const S = AO.Game.getState();
-  check('hints disabled blocks hint()', (() => {
-    const before = S.hintsLeft;
-    AO.Game.hint();
-    return AO.Game.getState().hintsLeft === before;
-  })());
-  AO.Game.setHintsEnabled(true);
-  AO.Game.setAssistCursor(true);
-  check('assist cursor flag set', AO.Game.getState().assistCursor === true);
-  AO.Game.setAssistCursor(false);
-  AO.Game.newBoard();
-  check('newBoard loads a fresh board (random level)', AO.Game.getState().phase === 'playing');
+  check('nextLevel -> level 3', S.level === 3 && S.phase === 'playing');
+  AO.Game.goMenu();
+  check('goMenu returns to menu screen', S.phase === 'menu' && getEl('screen-start').classList.contains('hidden') === false);
 }
 
-// --- persistence ---
+// --- persistence across reload ---
 {
-  const saved = JSON.parse(localStorageMock.getItem('arrowEscape.v1'));
-  check('localStorage persisted (level == 2, lost level 2 does not advance)',
-    saved.level === 2 && !!saved.stars[1] && !saved.stars[2]);
+  const savedRaw = localStorageMock.getItem('arrowEscape.v1');
+  check('storage populated', !!savedRaw);
+  const saved = JSON.parse(savedRaw);
+  /* level 1 was won (advances to 2), level 2 was lost (does NOT advance to 3) */
+  check('localStorage persisted (level == 2, not beyond loss)', saved.level === 2);
+  check('localStorage persisted (stars for 1; none for lost level 2)', !!saved.stars[1] && !saved.stars[2]);
+}
+
+// --- deterministic daily-puzzle style generation across sizes ---
+{
+  let ok = true;
+  for (let lvl = 1; lvl <= 40; lvl++) {
+    const a = L.buildLevel(lvl), b = L.buildLevel(lvl);
+    if (JSON.stringify(a.grid) !== JSON.stringify(b.grid)) { ok = false; break; }
+  }
+  check('generation deterministic (levels 1..40)', ok);
 }
 
 console.log('\n' + (failures === 0 ? 'ALL GAME SMOKE TESTS PASSED ✔' : failures + ' FAILURES ✘'));

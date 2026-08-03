@@ -1,6 +1,6 @@
-/* Node test — verifies the long-arrow exit animation stack:
- *   press phase → accelerate travel → motion-blur/trail → pop on exit →
- *   chain-reaction glow on dependents → undo slide-back
+/* Node test — verifies the premium exit-animation stack:
+ *   press scale phase → ease-in travel → motion-blur/trail → pop on exit →
+ *   chain-reaction glow on newly-unlocked arrows → sounds (slide/pop)
  * Run: node test/animation.test.js
  */
 'use strict';
@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-/* ---------------- DOM / canvas mocks ---------------- */
+/* ---------------- DOM / canvas mocks (same as game.smoke.test.js) ---------------- */
 function makeClassList(el) {
   return {
     add: (c) => el._cls.add(c),
@@ -71,7 +71,7 @@ function runFrames(n, stepMs = 16) {
 
 const vibrateCalls = [];
 const sandbox = {
-  window: { addEventListener() {}, removeEventListener() {}, devicePixelRatio: 2 },
+  window: { addEventListener() {}, removeEventListener() {} },
   globalThis: null,
   document: {
     readyState: 'complete',
@@ -99,15 +99,14 @@ sandbox.window.setTimeout = setTimeout;
 sandbox.window.clearTimeout = clearTimeout;
 
 vm.createContext(sandbox);
-for (const f of ['puzzle.js', 'difficulty.js', 'hints.js', 'renderer.js', 'audio.js', 'engine.js', 'ui.js']) {
+for (const f of ['levels.js', 'audio.js', 'game.js', 'ui.js']) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8'), sandbox, { filename: f });
 }
 sandbox.AO = sandbox.window.AO;
-vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'game.js'), 'utf8'), sandbox, { filename: 'game.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8'), sandbox, { filename: 'main.js' });
 
 const AO = sandbox.window.AO;
-const P = AO.Puzzle;
+const L = AO.Levels;
 
 let failures = 0;
 const check = (name, cond, extra) => {
@@ -115,83 +114,114 @@ const check = (name, cond, extra) => {
   else { failures++; console.error('  ✘ ' + name + (extra ? ' — ' + extra : '')); }
 };
 
+/* spy on sounds */
 const played = [];
 const origPlay = AO.Sound.play;
 AO.Sound.play = (n) => { played.push(n); return origPlay(n); };
 
-function tapFirstRemovable() {
-  const ids = AO.Game.debugRemovable();
-  if (!ids.length) return null;
-  const id = ids[0];
+function removableCells() {
   const S = AO.Game.getState();
-  const a = S.puzzle.arrows[id];
-  AO.Game.tapCell(a.cells[0].x, a.cells[0].y);
-  return id;
+  return L.removableArrows(S.grid, S.size).map((a) => a.x + ',' + a.y);
 }
 
-console.log('Animation stack test — long-arrow exit sequence...\n');
+console.log('Animation stack test — press, travel, pop, chain-glow, sounds...\n');
 runFrames(5);
 AO.Game.startLevel(1);
 runFrames(3);
 played.length = 0;
 vibrateCalls.length = 0;
 
-const id = tapFirstRemovable();
-check('found a removable arrow to tap', id != null);
 const S0 = AO.Game.getState();
-const target = S0.puzzle.arrows[id];
+const before = removableCells();
+const first = L.removableArrows(S0.grid, S0.size)[0];
+AO.Game.tapCell(first.x, first.y);
 
-/* --- press phase --- */
-runFrames(2); // +32ms (< press 60ms)
-{
-  check('slide anim created on tap', AO.Game.debugAnims().length === 1);
-  check('whoosh played at tap', played.includes('slide'));
-  check('haptic tick at tap', vibrateCalls.some((v) => v === 8));
-}
-
-/* --- travel phase --- */
-runFrames(5); // +80ms → ~112ms in
-{
-  check('anim still active during travel', AO.Game.debugAnims().length === 1);
-  check('slide arrow actually rendered (debugSlideDraws > 0)', AO.Game.debugSlideDraws() > 0);
-  check('trail particles spawned', AO.Game.debugParts().length > 0);
-}
-
-/* --- after exit (~300ms) --- */
-runFrames(14); // +224ms → ~336ms
+/* --- press phase (elapsed < 55ms) --- */
+runFrames(2); // +32ms
 {
   const S = AO.Game.getState();
-  check('anim removed after exit', AO.Game.debugAnims().length === 0);
-  check('arrow exited (onBoard false)', !S.live[id].onBoard);
-  check('pop sound played on exit', played.includes('pop'));
-  check('pop burst particles spawned', AO.Game.debugParts().length > 0);
+  const anims = AO.Game.debugAnims();
+  check('anim created on tap', anims.length === 1);
+  check('cell state = sliding during press', S.cells[first.y][first.x].state === 'sliding');
+  check('slide whoosh played at tap', played.includes('slide'));
+  check('haptic tick on tap', vibrateCalls.some((p) => p === 8 || (Array.isArray(p) && p[0] === 8) || (Array.isArray(p) && p.includes(8))));
+  check('no trail particles during press phase', AO.Game.debugParts().length === 0, 'trail leaked early');
+}
 
-  /* chain reaction: dependents of the removed arrow should be glowing */
-  const dependents = S.puzzle.dependents[id] || [];
-  if (dependents.length) {
-    let allGlow = true;
-    for (const dep of dependents) {
-      if (!S.live[dep] || !S.live[dep].onBoard) continue;
-      const t = S.now - S.live[dep].glowPulse;
-      if (!(S.live[dep].glowPulse > 0 && t >= 0 && t < 1.5)) allGlow = false;
+/* --- travel phase: arrow accelerates, trail appears --- */
+runFrames(5); // +80ms → elapsed ~112ms
+{
+  check('anim still active during travel', AO.Game.debugAnims().length === 1);
+  check('trail particles spawned during travel', AO.Game.debugParts().length > 0);
+}
+
+/* --- after ~300ms: exit complete --- */
+runFrames(14); // +224ms → total elapsed ~368ms
+{
+  const S = AO.Game.getState();
+  const anims = AO.Game.debugAnims();
+  check('anim removed after travel', anims.length === 0);
+  check('cell gone after exit', S.cells[first.y][first.x].state === 'gone');
+  check('pop sound played on exit', played.includes('pop'));
+  check('pop burst particles spawned on exit', AO.Game.debugParts().length > 0);
+
+  /* chain-reaction glow: arrows that became removable must be pulsing */
+  const after = removableCells();
+  const newly = after.filter((k) => !before.includes(k) && k !== first.x + ',' + first.y);
+  if (newly.length) {
+    let allPulsing = true;
+    for (const k of newly) {
+      const [x, y] = k.split(',').map(Number);
+      const t = S.now - S.cells[y][x].glowPulse;
+      if (!(S.cells[y][x].glowPulse > 0 && t >= 0 && t < 1.0)) allPulsing = false;
     }
-    check('dependents glow (chain reaction)', allGlow);
+    check('newly-unlocked arrows glow (chain reaction)', allPulsing, JSON.stringify(newly));
   } else {
-    console.log('  (no dependents for this arrow — chain-glow n/a)');
+    console.log('  (level 1 first move unlocked no new arrows — chain-glow n/a, skipping)');
   }
 }
 
-/* --- undo: slide-back animation --- */
+/* --- undo: animated slide-back --- */
 {
   const S = AO.Game.getState();
-  const animsBefore = AO.Game.debugAnims().length;
-  AO.Game.undo();
-  const anims = AO.Game.debugAnims();
-  check('undo creates a reverse slide-back anim', anims.length === animsBefore + 1 && anims[anims.length - 1].rev === true);
-  runFrames(16); // ~256ms
-  const S2 = AO.Game.getState();
-  check('arrow restored after slide-back', S2.live[id].onBoard && S2.removedCount === 0);
-  check('board occupancy restored', S2.puzzle.board.arrowIdAt(target.cells[0].x, target.cells[0].y) === id);
+  const before = removableCells();
+  const tgt = L.removableArrows(S.grid, S.size)[0];
+  if (tgt) {
+    AO.Game.tapCell(tgt.x, tgt.y);
+    runFrames(22); /* wait for exit (~300 ms) */
+    const cell = S.cells[tgt.y][tgt.x];
+    check('arrow fully exited before undo', cell.state === 'gone');
+    const animsBefore = AO.Game.debugAnims().length;
+    AO.Game.undo();
+    const undoAnims = AO.Game.debugAnims();
+    check('undo creates a reverse (slide-back) animation', undoAnims.length === animsBefore + 1 && undoAnims[undoAnims.length - 1].rev === true);
+    runFrames(18); /* finish slide-back (~220 ms) */
+    check('arrow restored to idle after slide-back', S.cells[tgt.y][tgt.x].state === 'idle');
+    check('grid restored after undo', S.grid[tgt.y][tgt.x] === tgt.dir);
+  } else {
+    console.log('  (no removable arrow to undo — skipping undo anim check)');
+  }
+}
+
+/* --- wrong tap still shakes + haptics --- */
+{
+  const S = AO.Game.getState();
+  const blocked = (() => {
+    for (let y = 0; y < S.size; y++)
+      for (let x = 0; x < S.size; x++)
+        if (S.grid[y][x] >= 0 && !L.pathClear(S.grid, S.size, x, y, S.grid[y][x])) return { x, y };
+    return null;
+  })();
+  if (blocked) {
+    const before = vibrateCalls.length;
+    AO.Game.tapCell(blocked.x, blocked.y);
+    check('wrong tap vibrates (strong)', vibrateCalls.length > before && vibrateCalls[vibrateCalls.length - 1] === 45);
+    check('heart lost on wrong tap', S.hearts === 4);
+  }
+}
+
+function partsLen() {
+  return AO.Game.debugParts().length;
 }
 
 console.log('\n' + (failures === 0 ? 'ALL ANIMATION TESTS PASSED ✔' : failures + ' FAILURES ✘'));

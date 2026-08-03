@@ -1,69 +1,113 @@
 #!/usr/bin/env python3
-"""Render a faithful preview of the long-arrow UI — for visual verification.
-Loads the real puzzle generator via Node, then draws the arrows with PIL
-(rounded joints approximated by circles, filled arrowheads, navy on white).
-Usage: python3 tools/render-preview.py [level]
-"""
-import sys, subprocess, json, math
-from PIL import Image, ImageDraw
+"""Render a faithful preview of the Arrow Escape UI (mockup) — for visual verification."""
+import sys, subprocess, json
+from PIL import Image, ImageDraw, ImageFont
 
 NODE = r"""
 const fs=require('fs'),vm=require('vm');
-const sb={globalThis:{}}; vm.createContext(sb);
-for (const f of ['puzzle.js','difficulty.js','hints.js','renderer.js'])
-  vm.runInContext(fs.readFileSync('/home/user/AgentOS/web/js/'+f,'utf8'), sb, {filename:f});
-const AO=sb.globalThis.AO;
+const src=fs.readFileSync('/home/user/AgentOS/web/js/levels.js','utf8');
+const sb={globalThis:{}}; vm.createContext(sb); vm.runInContext(src,sb);
+const L=sb.globalThis.AO.Levels;
 const N=parseInt(process.argv[1]);
-const lv=AO.Puzzle.buildLevel(N);
-console.log(JSON.stringify({level:N,size:lv.size,shape:lv.shape,arrows:lv.arrows.map(a=>({cells:a.cells,dir:a.dir,length:a.length})),removal:lv.removalOrder}));
+const lv=L.buildLevel(N);
+console.log(JSON.stringify({level:N,size:lv.size,shape:lv.shape,grid:lv.grid}));
 """
 
 def get_level(n):
     out = subprocess.run(['node', '-e', NODE, str(n)], capture_output=True, text=True)
     return json.loads(out.stdout)
 
-def draw_arrow(d, pts, head, dir_, cell, color, width, shadow=False):
-    """rounded polyline (circles at joints) + filled arrowhead; dir 0=up 1=right 2=down 3=left"""
-    ox, oy = (0, 2.5) if shadow else (0, 0)
-    w = width + (3 if shadow else 0)
-    col = (20, 30, 40, 30) if shadow else color
-    for i in range(len(pts) - 1):
-        d.line([pts[i][0]+ox, pts[i][1]+oy, pts[i+1][0]+ox, pts[i+1][1]+oy], fill=col, width=w)
-    for (x, y) in pts[1:-1]:
-        d.ellipse((x-ox-w/2, y+oy-w/2, x+ox+w/2, y+oy+w/2), fill=col)
-    # arrowhead at head, pointing dir
-    ux, uy = [(0,-1),(1,0),(0,1),(-1,0)][dir_]
-    px, py = [(1,0),(0,1),(-1,0),(0,-1)][dir_]  # perpendicular
-    tip = (head[0]+ux*cell*0.42, head[1]+uy*cell*0.42)
-    base = (head[0]-ux*cell*0.18, head[1]-uy*cell*0.18)
-    w1 = (base[0]+px*cell*0.17, base[1]+py*cell*0.17)
-    w2 = (base[0]-px*cell*0.17, base[1]-py*cell*0.17)
-    d.polygon([tip, w1, w2], fill=color)
+def draw_arrow(d, cx, cy, u, dir_, color, w=None):
+    """minimal arrow: rounded shaft + triangle head (dir: 0=up,1=right,2=down,3=left)"""
+    sh = (w or u*0.21)
+    tail, mid = -u*0.30, u*0.06
+    hw, tip = u*0.19, u*0.34
+    def R(x, y):
+        k = (dir_ - 1) % 4
+        for _ in range(k):
+            x, y = -y, x
+        return cx + x, cy + y
+    x1, y1 = R(tail, 0); x2, y2 = R(mid, 0)
+    d.line([x1, y1, x2, y2], fill=color, width=max(2, int(sh)))
+    pts = [R(tip, 0), R(-u*0.02, -hw), R(-u*0.02, hw)]
+    d.polygon(pts, fill=color)
+
+def draw_heart(d, cx, cy, s, fill, outline=None):
+    o = outline or fill
+    d.polygon([(cx, cy-s*0.35), (cx+s*0.62, cy+s*0.35), (cx, cy+s*0.95)], fill=o)
+    d.ellipse((cx-s*0.95, cy-s*0.75, cx-s*0.05, cy+s*0.15), fill=o)
+    d.ellipse((cx+s*0.05, cy-s*0.75, cx+s*0.95, cy+s*0.15), fill=o)
+    d.polygon([(cx, cy-s*0.35), (cx+s*0.62, cy+s*0.35), (cx, cy+s*0.95)], fill=fill)
+    d.ellipse((cx-s*0.95, cy-s*0.75, cx-s*0.05, cy+s*0.15), fill=fill)
+    d.ellipse((cx+s*0.05, cy-s*0.75, cx+s*0.95, cy+s*0.15), fill=fill)
 
 lv = get_level(int(sys.argv[1]) if len(sys.argv) > 1 else 10)
-size, shape = lv['size'], lv['shape']
-CELL = 64
-PAD = 55
+size, grid, shape = lv['size'], lv['grid'], lv['shape']
+
+CELL = 110
+PAD = 60
 W, H = 420, 760
-X0, Y0 = (W - size*CELL)//2, 130
+BW, BH = size*CELL + PAD*2, size*CELL + PAD*2
+X0 = (W - BW)//2
+Y0 = 130
 
 img = Image.new('RGB', (W, H), '#ffffff')
-d = ImageDraw.Draw(img, 'RGBA')
+d = ImageDraw.Draw(img)
+try:
+    f_mid = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 19)
+except Exception:
+    f_mid = ImageFont.load_default()
 
-# subtle grid
+# HUD
+d.rounded_rectangle((16, 16, 58, 58), radius=29, outline='#dcdcdc', width=2)
+d.line((30, 30, 44, 44), fill='#141414', width=3)
+d.line((44, 30, 30, 44), fill='#141414', width=3)
+d.text((74, 28), f"Level {lv['level']}", font=f_mid, fill='#141414')
+for i in range(5):
+    draw_heart(d, W - 34 - i*31, 40, 13, '#ff3b30' if i < 4 else '#d5d5d5')
+
+# board
 for y in range(size):
     for x in range(size):
-        d.rectangle((X0+x*CELL+2, Y0+y*CELL+2, X0+x*CELL+CELL-2, Y0+y*CELL+CELL-2),
-                    outline=(238, 241, 246, 255), width=1)
+        v = grid[y][x]
+        cx = X0 + PAD + x*CELL + CELL//2
+        cy = Y0 + PAD + y*CELL + CELL//2
+        if v == -2:
+            continue
+        d.rectangle((cx-CELL//2+4, cy-CELL//2+4, cx+CELL//2-4, cy+CELL//2-4),
+                    outline='#ececec', width=2, fill='#fbfbfb')
+        if v >= 0:
+            draw_arrow(d, cx, cy, CELL*0.62, v, '#141414')
 
-NAVY = (28, 50, 83, 255)
-for a in lv['arrows']:
-    pts = [(X0 + c['x']*CELL + CELL//2, Y0 + c['y']*CELL + CELL//2) for c in a['cells']]
-    head = pts[-1]
-    draw_arrow(d, pts, head, a['dir'], CELL, NAVY, max(3, int(CELL*0.22)), shadow=True)
-    draw_arrow(d, pts, head, a['dir'], CELL, NAVY, max(3, int(CELL*0.22)))
+# hint example on a safe arrow: red path + red arrow
+hinted = None
+for y in range(size):
+    for x in range(size):
+        if grid[y][x] >= 0:
+            hinted = (x, y, grid[y][x]); break
+    if hinted: break
+if hinted:
+    x, y, dir_ = hinted
+    cx = X0 + PAD + x*CELL + CELL//2
+    cy = Y0 + PAD + y*CELL + CELL//2
+    # walk to exit
+    dxs = [0, 1, 0, -1]; dys = [-1, 0, 1, 0]
+    nx, ny = x + dxs[dir_], y + dys[dir_]
+    lx, ly = x, y
+    while 0 <= nx < size and 0 <= ny < size and grid[ny][nx] == -1:
+        lx, ly = nx, ny
+        nx += dxs[dir_]; ny += dys[dir_]
+    ex = X0 + PAD + lx*CELL + CELL//2
+    ey = Y0 + PAD + ly*CELL + CELL//2
+    d.line([cx, cy, ex, ey], fill='#ff3b30', width=8)
+    draw_arrow(d, cx, cy, CELL*0.62, dir_, '#ff3b30', w=CELL*0.23)
+
+# bottom bar
+bx = W//2
+d.rounded_rectangle((bx-118, H-92, bx-74, H-48), radius=22, outline='#dcdcdc', width=2)
+d.rounded_rectangle((bx-27, H-100, bx+27, H-40), radius=27, outline='#ff3b30', width=2)
+d.rounded_rectangle((bx+74, H-92, bx+118, H-48), radius=22, outline='#dcdcdc', width=2)
 
 out = '/home/user/AgentOS/docs/ui-preview-level%d.png' % lv['level']
 img.save(out)
-print('saved', out, '| shape:', shape, '| size:', size, 'x', size,
-      '| arrows:', len(lv['arrows']), '| removal:', lv['removal'])
+print('saved', out, '| shape:', shape, '| size:', size)

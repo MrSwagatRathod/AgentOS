@@ -1,5 +1,6 @@
-/* Node test — verifies long arrows exit in ALL FOUR directions (up/right/down/left)
- * and that the sliding path is actually rendered while traveling.
+/* Node test — verifies the exit-slide animation renders for ALL four directions
+ * (up, right, down, left). Regression test for the bug where the sliding arrow
+ * was never drawn because the grid cell was already EMPTY during the slide.
  * Run: node test/directions.test.js
  */
 'use strict';
@@ -7,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
+/* ---------------- DOM / canvas mocks (same harness as other tests) ---------------- */
 function makeClassList(el) {
   return {
     add: (c) => el._cls.add(c),
@@ -34,7 +36,7 @@ function makeEl(id) {
 const elements = {};
 const getEl = (id) => (elements[id] || (elements[id] = makeEl(id)));
 
-const rotations = [];
+const rotations = []; /* spy on ctx.rotate to verify arrow orientation */
 const canvas = makeEl('board');
 const ctx = new Proxy({}, {
   get(t, p) {
@@ -70,7 +72,7 @@ function runFrames(n, stepMs = 16) {
 }
 
 const sandbox = {
-  window: { addEventListener() {}, removeEventListener() {}, devicePixelRatio: 2 },
+  window: { addEventListener() {}, removeEventListener() {} },
   globalThis: null,
   document: {
     readyState: 'complete',
@@ -98,55 +100,80 @@ sandbox.window.setTimeout = setTimeout;
 sandbox.window.clearTimeout = clearTimeout;
 
 vm.createContext(sandbox);
-for (const f of ['puzzle.js', 'difficulty.js', 'hints.js', 'renderer.js', 'audio.js', 'engine.js', 'ui.js']) {
+for (const f of ['levels.js', 'audio.js', 'game.js', 'ui.js']) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8'), sandbox, { filename: f });
 }
 sandbox.AO = sandbox.window.AO;
-vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'game.js'), 'utf8'), sandbox, { filename: 'game.js' });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'main.js'), 'utf8'), sandbox, { filename: 'main.js' });
 
 const AO = sandbox.window.AO;
-const P = AO.Puzzle;
+const L = AO.Levels;
 
 let failures = 0;
 const check = (name, cond, extra) => {
   if (cond) console.log('  ✔ ' + name);
   else { failures++; console.error('  ✘ ' + name + (extra ? ' — ' + extra : '')); }
 };
+
+/* silence sound spam */
 AO.Sound.play = () => {};
 
-const DIR_NAME = ['up', 'right', 'down', 'left'];
+console.log('Direction animation test — slide must render for all 4 directions...\n');
 
-/* Find a removable arrow for each head direction across levels 1..120 */
-const found = {};
-for (let lvl = 1; lvl <= 120 && Object.keys(found).length < 4; lvl++) {
-  const p = P.buildLevel(lvl);
-  const sim = p.board.clone();
-  /* removable = head ray clear (excluding own id) */
-  for (const a of p.arrows) {
-    if (!found[a.dir] && sim.headRayClear(a.end.x, a.end.y, a.dir, a.id)) {
-      found[a.dir] = { level: lvl, id: a.id };
+/* Find the first level that has a removable arrow pointing in each direction */
+const DIR_NAME = ['up', 'right', 'down', 'left'];
+let found = {};
+for (let lvl = 1; lvl <= 60 && Object.keys(found).length < 4; lvl++) {
+  const lv = L.buildLevel(lvl);
+  const list = L.removableArrows(lv.grid, lv.size);
+  for (const a of list) {
+    if (!found[a.dir]) {
+      found[a.dir] = { level: lvl, cell: { x: a.x, y: a.y }, dir: a.dir };
     }
   }
 }
+for (let d = 0; d < 4; d++) {
+  check('found a removable arrow for direction ' + DIR_NAME[d], !!found[d],
+    'searched levels 1..60 — none removable in this direction (would be a generator bug)');
+}
 
+/* For each direction: start that level, tap the removable arrow, run frames,
+ * and assert the SLIDING ARROW WAS ACTUALLY DRAWN (drawSliding reached) and
+ * the arrow exited properly. */
 for (let d = 0; d < 4; d++) {
   const info = found[d];
-  if (!info) { check(DIR_NAME[d] + ': found a removable arrow', false, 'none across levels 1..120'); continue; }
-  AO.Game.startLevel(info.level);
-  runFrames(3);
+  if (!info) continue;
+  const lvl = info.level;
+
+  AO.Game.startLevel(lvl);
+  runFrames(2);
+
   const S = AO.Game.getState();
-  const a = S.puzzle.arrows[info.id];
   const before = AO.Game.debugSlideDraws();
-  AO.Game.tapCell(a.cells[0].x, a.cells[0].y);
-  runFrames(7); // during travel
+  rotations.length = 0;
+  const target = L.removableArrows(S.grid, S.size).find((a) => a.dir === d);
+  check('level ' + lvl + ': removable ' + DIR_NAME[d] + ' arrow still present', !!target);
+
+  AO.Game.tapCell(target.x, target.y);
+  runFrames(6);   // during travel (~96-192 ms in)
   const during = AO.Game.debugSlideDraws();
-  check(DIR_NAME[d] + ' (L' + info.level + '): sliding path rendered during travel',
-    during > before, 'drawSliding never reached');
-  runFrames(20); // finish
+  check(DIR_NAME[d] + ': sliding arrow rendered during travel (' + during + ' frames)',
+    during > before, 'drawSliding was never reached — the exit animation is invisible');
+
+  /* arrow orientation: the dominant rotation must equal (dir-1)*π/2 (+ small natural rot) */
+  const expected = (d - 1) * Math.PI / 2;
+  const okRot = rotations.some((r) => Math.abs(r - expected) < 0.12);
+  check(DIR_NAME[d] + ': arrow drawn facing its direction (rot≈' + expected.toFixed(2) + ')',
+    okRot, 'rotations seen: ' + rotations.slice(0, 8).map((r) => r.toFixed(2)).join(', '));
+
+  runFrames(20);  // finish (~300 ms)
+  const after = AO.Game.getState();
+  check(DIR_NAME[d] + ': arrow fully exited (cell gone, removed count ok)',
+    after.cells[target.y][target.x].state === 'gone' && after.removed === 1);
+
+  /* sanity: the anim direction matches the tap */
   const S2 = AO.Game.getState();
-  check(DIR_NAME[d] + ': arrow fully exited', !S2.live[info.id].onBoard);
-  check(DIR_NAME[d] + ': removed from occupancy', S2.puzzle.board.arrowIdAt(a.cells[0].x, a.cells[0].y) == null);
+  check(DIR_NAME[d] + ': arrow removed from grid', S2.grid[target.y][target.x] === L.EMPTY);
 }
 
 console.log('\n' + (failures === 0 ? 'ALL DIRECTION TESTS PASSED ✔' : failures + ' FAILURES ✘'));
