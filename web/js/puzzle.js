@@ -502,10 +502,12 @@
     };
   }
 
-  /* Build a level by difficulty params with bounded deterministic retries. */
-  function buildLevel(level, difficulty) {
-    var D = difficulty || global.AO.Difficulty;
-    var p = D.levelParams(level);
+  /* Build a level with bounded deterministic retries.
+   * `params` may be passed explicitly (challenge mode) or derived from the
+   * Difficulty manager by level number. */
+  function buildLevel(level, params) {
+    var D = global.AO.Difficulty;
+    var p = params || D.levelParams(level);
     var best = null;
     var seed = (level * 2654435761) ^ (p.size * 48271) ^ hashStr(p.shape) ^ 0x9E3779B9;
     for (var tryIdx = 0; tryIdx < 10; tryIdx++) {

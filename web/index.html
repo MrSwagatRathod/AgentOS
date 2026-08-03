@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>Arrows — Puzzle Escape</title>
-  <meta name="description" content="Arrows: a minimalist logic puzzle. Tap arrows whose path is clear to slide them off the board. No timer, just your brain.">
+  <title>Arrow Escape — Arrow Logic Puzzle</title>
+  <meta name="description" content="Only arrows with a fully open path can leave the board. Clear every arrow. Main Route, Random Play and Challenge Mode — all in your browser.">
   <meta name="theme-color" content="#ffffff" id="meta-theme">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -14,164 +14,144 @@
 <body>
   <div id="app">
 
+    <!-- ======================= TOP BAR ======================= -->
+    <header id="topbar">
+      <div id="level-badge">Level 1</div>
+      <div id="hearts-box" title="Hearts">
+        <span class="heart-icon">♥</span><span id="hearts-text">3 / 3</span>
+      </div>
+      <nav id="mode-tabs">
+        <button class="mode-tab" data-mode="main">Main Route</button>
+        <button class="mode-tab" data-mode="random">Random Play</button>
+        <button class="mode-tab" data-mode="challenge">Challenge Mode</button>
+      </nav>
+      <button id="btn-hint" class="pill-btn" title="Hint (H)">Hint</button>
+      <div id="timer">Time <b id="time-val">05:00</b></div>
+      <button id="btn-newboard" class="pill-btn" title="Load a fresh board">New Board</button>
+      <button id="btn-fullscreen" class="icon-btn" title="Fullscreen (F)">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+      </button>
+      <button id="btn-settings" class="icon-btn" title="Settings">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </header>
+
     <!-- ======================= GAME CANVAS ======================= -->
     <div id="stage"><canvas id="board"></canvas></div>
 
-    <!-- ======================= HUD (top) ======================= -->
-    <div id="hud" class="hidden">
-      <button id="btn-menu" class="icon-btn" aria-label="Menu" title="Menu">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
-      </button>
-      <div id="level-badge">Level 1</div>
-      <div class="spacer"></div>
-      <div id="hearts" aria-label="Hearts">
-        <span class="heart"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg></span>
-        <span class="heart"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg></span>
-        <span class="heart"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg></span>
-        <span class="heart"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg></span>
-        <span class="heart"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg></span>
-      </div>
-    </div>
+    <!-- ======================= BOTTOM BAR ======================= -->
+    <footer id="bottombar">
+      <button id="btn-chooseboard" class="pill-btn">Choose Board</button>
+      <button id="btn-restart" class="pill-btn">Restart</button>
+    </footer>
 
-    <!-- ======================= BOTTOM ACTION BAR ======================= -->
-    <div id="bottom-bar" class="hidden">
-      <button id="btn-undo" class="icon-btn round" aria-label="Undo" title="Undo (U)">
-        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h9a5 5 0 0 1 0 10H8"/><polyline points="7 4 3 8 7 12"/></svg>
-      </button>
-      <button id="btn-hint" class="icon-btn round hint" aria-label="Hint" title="Hint (H)">
-        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.2 2.2h4.8c.1-.9.5-1.7 1.2-2.2A6 6 0 0 0 12 3z"/></svg>
-        <span id="hint-count" class="badge">3</span>
-      </button>
-      <button id="btn-restart" class="icon-btn round" aria-label="Restart" title="Restart (R)">
-        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-      </button>
-    </div>
+    <!-- ======================= SETTINGS ======================= -->
+    <div id="modal-settings" class="modal hidden">
+      <div class="card settings-card">
+        <div class="card-head">
+          <h2>Settings</h2>
+          <button id="settings-close" class="icon-btn" aria-label="Close">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
 
-    <!-- ======================= START SCREEN ======================= -->
-    <div id="screen-start" class="screen">
-      <div class="top-toggles">
-        <button id="btn-theme" class="icon-btn round" aria-label="Toggle theme" title="Toggle theme">
-          <svg id="icon-theme" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.4"/><path d="M12 2v2.6M12 19.4V22M4.9 4.9l1.9 1.9M17.2 17.2l1.9 1.9M2 12h2.6M19.4 12H22M4.9 19.1l1.9-1.9M17.2 6.8l1.9-1.9"/></svg>
-        </button>
-        <button id="btn-sound" class="icon-btn round" aria-label="Toggle sound" title="Toggle sound">
-          <svg id="icon-sound" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
-        </button>
-      </div>
+        <div class="setting-row">
+          <span class="setting-label">Display</span>
+          <div class="seg" id="seg-display">
+            <button data-val="mono" class="seg-btn">Mono</button>
+            <button data-val="color" class="seg-btn">Color</button>
+          </div>
+        </div>
 
-      <div class="brand-wrap">
-        <h1 class="brand">Arrows</h1>
-        <p class="tagline">Clear the grid. One tap at a time.</p>
-      </div>
+        <div class="setting-row">
+          <span class="setting-label">Line Width</span>
+          <div class="seg" id="seg-linewidth">
+            <button data-val="thin" class="seg-btn">Thin</button>
+            <button data-val="normal" class="seg-btn">Normal</button>
+            <button data-val="bold" class="seg-btn">Bold</button>
+          </div>
+        </div>
 
-      <div class="start-actions">
-        <button id="btn-play" class="btn primary big">Play</button>
-        <div class="row">
-          <button id="btn-levels" class="btn ghost">Levels</button>
-          <button id="btn-howto" class="btn ghost">How to play</button>
+        <div class="setting-row">
+          <span class="setting-label">Sound</span>
+          <div class="seg" id="seg-sound">
+            <button data-val="off" class="seg-btn">Off</button>
+            <button data-val="on" class="seg-btn">On</button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <span class="setting-label">Hints</span>
+          <div class="seg" id="seg-hints">
+            <button data-val="off" class="seg-btn">Off</button>
+            <button data-val="on" class="seg-btn">On</button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <span class="setting-label">Assist Cursor</span>
+          <div class="seg" id="seg-assist">
+            <button data-val="off" class="seg-btn">Off</button>
+            <button data-val="on" class="seg-btn">On</button>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- ======================= IN-GAME MENU ======================= -->
-    <div id="modal-menu" class="modal hidden">
-      <div class="card menu-card">
-        <h2>Pause</h2>
-        <button id="menu-continue" class="btn primary big">Continue</button>
-        <button id="menu-restart" class="btn ghost">Restart level</button>
-        <button id="menu-levels" class="btn ghost">Level select</button>
-        <button id="menu-howto" class="btn ghost">How to play</button>
-        <div class="row center">
-          <button id="menu-theme" class="icon-btn round" aria-label="Toggle theme">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.4"/><path d="M12 2v2.6M12 19.4V22M4.9 4.9l1.9 1.9M17.2 17.2l1.9 1.9M2 12h2.6M19.4 12H22M4.9 19.1l1.9-1.9M17.2 6.8l1.9-1.9"/></svg>
-          </button>
-          <button id="menu-sound" class="icon-btn round" aria-label="Toggle sound">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+    <!-- ======================= LEVEL SELECT (700) ======================= -->
+    <div id="modal-levels" class="modal hidden">
+      <div class="card levels-card">
+        <div class="card-head">
+          <h2 id="levels-title">Levels</h2>
+          <button id="levels-close" class="icon-btn" aria-label="Close">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
         </div>
+        <p class="sub" id="now-playing">700 Levels · Now Playing: 01</p>
+        <div id="level-grid"></div>
+      </div>
+    </div>
+
+    <!-- ======================= CHALLENGE SELECT (25) ======================= -->
+    <div id="modal-challenge" class="modal hidden">
+      <div class="card challenge-card">
+        <div class="card-head">
+          <h2>Challenge Mode</h2>
+          <button id="challenge-close" class="icon-btn" aria-label="Close">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+        <p class="sub">25 boards · beat the 5:00 timer. Pick a run.</p>
+        <div id="challenge-grid"></div>
       </div>
     </div>
 
     <!-- ======================= WIN OVERLAY ======================= -->
     <div id="overlay-win" class="overlay hidden">
       <div class="card win-card">
-        <h2 id="win-title">Level complete</h2>
-        <p class="sub" id="win-sub">Well done.</p>
-        <button id="btn-next" class="btn primary big">Next level</button>
-        <div class="row">
-          <button id="btn-replay" class="btn ghost">Replay</button>
-          <button id="btn-win-levels" class="btn ghost">Levels</button>
+        <div class="win-check" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 13 9 18 20 6"/></svg>
         </div>
+        <h2>Level Clear!</h2>
+        <p class="sub">You solved the board.</p>
+        <button id="btn-assist" class="btn ghost">Enable Assist Cursor</button>
+        <button id="btn-win-home" class="btn ghost">Home</button>
+        <button id="btn-next" class="btn primary big">Next Level</button>
       </div>
     </div>
 
     <!-- ======================= LOSE OVERLAY ======================= -->
     <div id="overlay-lose" class="overlay hidden">
       <div class="card lose-card">
-        <h2>Out of hearts</h2>
-        <p class="sub">Wrong taps cost hearts.<br>Think first, tap second.</p>
-        <button id="btn-retry" class="btn primary big">Try again</button>
+        <div class="lose-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </div>
+        <h2 id="lose-title">Out of hearts</h2>
+        <p class="sub" id="lose-sub">Collisions cost hearts. Read the board, then tap.</p>
+        <button id="btn-retry" class="btn primary big">Try Again</button>
         <div class="row">
-          <button id="btn-lose-levels" class="btn ghost">Levels</button>
-          <button id="btn-lose-menu" class="btn ghost">Menu</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ======================= LEVEL SELECT ======================= -->
-    <div id="modal-levels" class="modal hidden">
-      <div class="card levels-card">
-        <div class="card-head">
-          <h2>Levels</h2>
-          <button id="levels-close" class="icon-btn round" aria-label="Close">
-            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
-        </div>
-        <div id="level-grid"></div>
-      </div>
-    </div>
-
-    <!-- ======================= HOW TO PLAY ======================= -->
-    <div id="modal-howto" class="modal hidden">
-      <div class="card howto-card">
-        <div class="card-head">
-          <h2>How to play</h2>
-          <button id="howto-close" class="icon-btn round" aria-label="Close">
-            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
-        </div>
-        <ol class="rules">
-          <li>Each <b>arrow</b> is a winding path with a head at one end.</li>
-          <li>Tap an arrow — the <b>whole path slides out</b> in the direction its head points, if nothing blocks the way to the edge.</li>
-          <li>Tap a blocked arrow and you <b>lose a heart</b> (5 per level).</li>
-          <li>Clear every arrow to <b>win the level</b>. No timer — take your time.</li>
-          <li>Stuck? Use a <b>hint</b> — it highlights a safe arrow, its path, and its exit in red.</li>
-        </ol>
-        <div class="diagram">
-          <div class="d-row">
-            <div class="d-cell ok">→</div>
-            <div class="d-cell ok">→</div>
-            <div class="d-cell ok">→</div>
-            <div class="d-cell ok">→</div>
-          </div>
-          <div class="d-row">
-            <div class="d-cell">↓</div>
-            <div class="d-cell ok">→</div>
-            <div class="d-cell ok">→</div>
-            <div class="d-cell ok">→</div>
-          </div>
-          <div class="d-row">
-            <div class="d-cell">↓</div>
-            <div class="d-cell bad">←</div>
-            <div class="d-cell">←</div>
-            <div class="d-cell">←</div>
-          </div>
-          <div class="d-row">
-            <div class="d-cell">↓</div>
-            <div class="d-cell bad">←</div>
-            <div class="d-cell">←</div>
-            <div class="d-cell">←</div>
-          </div>
-          <p class="legend"><span class="ok">Clear path → safe</span> · <span class="bad">Blocked → costs a heart</span></p>
+          <button id="btn-lose-home" class="btn ghost">Home</button>
+          <button id="btn-lose-levels" class="btn ghost">Choose Board</button>
         </div>
       </div>
     </div>

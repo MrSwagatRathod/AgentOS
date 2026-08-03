@@ -30,10 +30,31 @@ Or just open `index.html` directly in a browser.
 | `AO.Engine` | `js/engine.js` | animation engine + state machine + pooled particles + input |
 | `AO.Game` | `js/game.js` | facade for UI / keyboard / tests |
 
-**Gameplay (long arrows):**
-- Arrows are **winding multi-cell paths** (3–4 cells early → 8–16 later) with a filled head at one end
-- Tap → the **whole path rigidly slides out** along the head direction if its head ray to the board edge is clear; wrong tap costs a heart (5 per level)
-- Each level is a **dependency graph**: arrow X depends on every arrow whose cells block X's head ray — the puzzle is finding removable arrows (no dead ends: removability is monotone)
+**The rule (same as the reference):** only arrows with a **fully open path** can leave the board. Tap an arrow → its whole path flies straight out in the direction its head points — but only if nothing blocks the route to the board edge. Collision = lost heart (3/3).
+
+**Product features (matching the reference's feature set, all original implementations):**
+
+| Feature | Details |
+|---|---|
+| **700-level library** | Deterministic procedural levels 1–700, easy → hard (Main Route) |
+| **Main Route** | Guided easy-to-hard progression, auto-advances |
+| **Random Play** | Fresh random board from the library; **New Board** loads another |
+| **Challenge Mode** | 25 dedicated harder boards + **5:00 countdown timer** (fails on timeout) |
+| **Hearts 3 / 3** | Shown top-center; collisions cost hearts; 0 = level failed |
+| **Hint** | Highlights the next safe arrow + its exit path in red (3 per level) |
+| **Time 05:00** | Timer in the header; counts down in Challenge |
+| **Display: Mono / Color** | Mono = navy arrows; Color = each arrow gets its own hue |
+| **Line Width: Thin / Normal / Bold** | Global stroke width setting |
+| **Sound Off / On** | Synthesized WebAudio SFX |
+| **Hints Off / On** | Disables the hint button |
+| **Assist Cursor Off / On** | Pulsing dashed ring + direction chevron on the best safe arrow (win screen offers "Enable Assist Cursor") |
+| **New Board** | Loads a fresh board from the library |
+| **Fullscreen** | One-click fullscreen (F key) |
+| **Choose Board** | Grid of all 700 levels, "Now Playing" indicator, star-progress marks |
+| **Win screen** | "Level Clear! You solved the board." + Enable Assist Cursor / Home / Next Level |
+| **Fail screens** | "Out of hearts" (collisions) and "Time's up!" (challenge) |
+| **Zoom / pan** | Pinch zoom + wheel zoom on the board |
+| **Mode tip toast** | "Level N is ready." on every board load |
 
 **Generation guarantees (tested):**
 - **Always solvable** — reverse-construction invariant + exact simulation validation
@@ -41,11 +62,10 @@ Or just open `index.html` directly in a browser.
 - **Deterministic** — same level number → identical puzzle (daily-challenge ready)
 - **~89–92% of cells filled**, minimum 80% across 400 levels
 - **Difficulty grows on 3 axes**: bigger boards (9 → 100 cells, monotonic), longer arrows (avg 2.4 → 7.7), deeper dependency chains (chain-bias placement links each new arrow into the previous arrow's head ray)
-- Chain-reaction placement deliberately creates dependencies instead of leaving them to chance
 
-**Premium exit animation (~300 ms):** press phase (head scales up) → whole path accelerates (ease-in-cubic) → motion-blur ghosts + particle trail along the entire path → pop burst + shockwave ring at the exit → micro shake + haptic tick → dependents **glow & pulse** (chain reaction). Undo = animated slide-back. Sounds: whoosh, pop, error, win, hint (all synthesized WebAudio, no files).
+**Premium exit animation (~300 ms):** press phase (head scales up) → whole path accelerates (ease-in-cubic) → motion-blur ghosts + particle trail → pop burst + shockwave ring at the exit → micro shake + haptic tick → dependents **glow & pulse** (chain reaction). Undo = animated slide-back. Sounds: whoosh, pop, error, win, hint (all synthesized WebAudio, no files).
 
-**Also:** hearts (5), hints (3), undo (3), level select with stars, light/dark themes, PWA (offline, installable), keyboard shortcuts (H/U/R/M/T), localStorage persistence, `tools/render-preview.py` for visual verification.
+**Also:** hints (3), undo (3), light/dark themes, PWA (offline, installable), keyboard shortcuts (H/U/R/M/T), localStorage persistence, `tools/render-preview.py` for visual verification.
 
 ## Run the tests
 

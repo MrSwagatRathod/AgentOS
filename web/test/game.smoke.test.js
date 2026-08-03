@@ -131,17 +131,22 @@ console.log('Game smoke test — long-arrow engine with mocked DOM/canvas...\n')
 runFrames(5);
 
 check('modules booted (AO populated)', !!(AO.Game && AO.Engine && AO.Puzzle && AO.Renderer && AO.Hints && AO.Store && AO.UI));
-check('boot: start screen visible', getEl('screen-start').classList.contains('hidden') === false);
+check('boot auto-starts Main Route level 1', (() => {
+  const s = AO.Game.getState();
+  return s.phase === 'playing' && s.mode === 'main' && s.level === 1;
+})());
+check('MAX_HEARTS = 3 (ArrowsGo style)', AO.Game.MAX_HEARTS === 3);
 runFrames(10);
 check('menu frames render without throwing', true);
 
 // --- Level 1 playthrough ---
-AO.Game.startLevel(1);
+AO.Game.startLevel(1, 'main');
 {
   const S = AO.Game.getState();
   check('startLevel(1) -> playing', S.phase === 'playing');
   check('level badge updated', getEl('level-badge').textContent === 'Level 1');
-  check('5 hearts', S.hearts === 5);
+  check('3 hearts', S.hearts === 3);
+  check('timer shows 05:00', getEl('time-val').textContent === '05:00');
   check('puzzle has long arrows (multi-cell paths)', (() => {
     for (const a of S.puzzle.arrows) if (a.length >= 3) return true;
     return false;
@@ -180,7 +185,7 @@ AO.Game.startLevel(1);
   const blocked = blockedIds();
   if (blocked.length) {
     tapArrow(blocked[0]);
-    check('blocked tap costs a heart', AO.Game.getState().hearts === 4);
+    check('blocked tap costs a heart', AO.Game.getState().hearts === 2);
     check('blocked arrow stays', (() => {
       const s = AO.Game.getState();
       return s.live[blocked[0]].onBoard;
@@ -205,11 +210,11 @@ AO.Game.startLevel(1);
 }
 
 // --- Level 2, force a loss ---
-AO.Game.startLevel(2);
+AO.Game.startLevel(2, 'main');
 {
   const S = AO.Game.getState();
-  check('startLevel(2) resets state (hearts 5, hints 3, undo 0)',
-    S.hearts === 5 && S.hintsLeft === 3 && S.undoStack.length === 0 && S.phase === 'playing');
+  check('startLevel(2) resets state (hearts 3, hints 3, undo 0)',
+    S.hearts === 3 && S.hintsLeft === 3 && S.undoStack.length === 0 && S.phase === 'playing');
 
   // drain hearts via wrong taps
   let lost = false;
@@ -225,15 +230,51 @@ AO.Game.startLevel(2);
 
   AO.Game.restartLevel();
   const S2 = AO.Game.getState();
-  check('retry restarts same level', S2.phase === 'playing' && S2.hearts === 5 && S2.level === 2);
+  check('retry restarts same level', S2.phase === 'playing' && S2.hearts === 3 && S2.level === 2);
 }
 
-// --- nextLevel & menu ---
+// --- nextLevel & home ---
 {
   AO.Game.nextLevel();
   check('nextLevel -> level 3', AO.Game.getState().level === 3);
   AO.Game.goMenu();
-  check('goMenu returns to menu', AO.Game.getState().phase === 'menu');
+  const s = AO.Game.getState();
+  check('goMenu returns to Main Route level 1', s.phase === 'playing' && s.mode === 'main' && s.level === 1);
+}
+
+// --- modes ---
+{
+  AO.Game.switchMode('random');
+  const s1 = AO.Game.getState();
+  check('switchMode(random) -> random playing', s1.mode === 'random' && s1.phase === 'playing' && s1.level >= 1 && s1.level <= 700);
+  AO.Game.switchMode('challenge');
+  const s2 = AO.Game.getState();
+  check('switchMode(challenge) -> challenge playing, timer enabled',
+    s2.mode === 'challenge' && s2.timerEnabled && s2.timerLeft <= 300);
+  check('challenge timer counts down', (() => {
+    const before = AO.Game.getState().timerLeft;
+    runFrames(30); // ~0.5s
+    const after = AO.Game.getState().timerLeft;
+    return after < before && after > 0;
+  })());
+  AO.Game.switchMode('main');
+}
+
+// --- settings toggles ---
+{
+  AO.Game.setHintsEnabled(false);
+  const S = AO.Game.getState();
+  check('hints disabled blocks hint()', (() => {
+    const before = S.hintsLeft;
+    AO.Game.hint();
+    return AO.Game.getState().hintsLeft === before;
+  })());
+  AO.Game.setHintsEnabled(true);
+  AO.Game.setAssistCursor(true);
+  check('assist cursor flag set', AO.Game.getState().assistCursor === true);
+  AO.Game.setAssistCursor(false);
+  AO.Game.newBoard();
+  check('newBoard loads a fresh board (random level)', AO.Game.getState().phase === 'playing');
 }
 
 // --- persistence ---

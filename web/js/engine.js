@@ -1,15 +1,16 @@
 /* ============================================================================
- * Arrow Escape — Game Engine
+ * Arrow Escape — Game Engine (ArrowsGo-style product layer)
  * ----------------------------------------------------------------------------
  * Responsibilities:
- *   - game state machine (menu / playing / won / lost)
- *   - live arrow records (on-board, sliding anims, glow, flash, shake)
- *   - animation engine: rigid-path exit slide (press → stretch → accelerate →
+ *   - game state machine (playing / won / lost)
+ *   - three modes: main route (levels 1..700 in order), random play (fresh
+ *     board from the library), challenge (25 boards, 5-minute timer)
+ *   - live arrow records + rigid-path exit animation (press → accelerate →
  *     blur → exit), undo slide-back, chain-reaction unlock pulses
- *   - particle pool (object reuse, no per-frame allocations)
- *   - input (tap hit-test against long arrow paths)
- *   - rendering loop (grid, arrows, hint, particles, screen feedback)
- * Depends on: AO.Puzzle, AO.DependencyGraph, AO.Hints, AO.Renderer, AO.Sound
+ *   - pooled particles, camera shake, input (tap + pinch zoom + wheel zoom)
+ *   - assist cursor (highlights the best safe arrow when enabled)
+ * Depends on: AO.Puzzle, AO.DependencyGraph, AO.Hints, AO.Renderer, AO.Sound,
+ * AO.Difficulty
  * ========================================================================== */
 (function (global) {
   'use strict';
@@ -18,47 +19,63 @@
   var Renderer = (global.AO || {}).Renderer;
   var Hints = (global.AO || {}).Hints;
   var Sound = (global.AO || {}).Sound;
+  var Difficulty = (global.AO || {}).Difficulty;
 
-  var MAX_HEARTS = 5;
+  var MAX_HEARTS = 3;          /* ArrowsGo: 3 / 3 */
   var MAX_UNDO = 3;
   var HINTS_PER_LEVEL = 3;
   var HINT_COOLDOWN = 5000;
   var HINT_DURATION = 9000;
-  var SLIDE_MS = 0.30;         /* exit travel 200-300 ms */
-  var PRESS_MS = 0.06;         /* press/select phase */
-  var UNSLIDE_MS = 0.22;       /* undo slide-back */
-  var CHAIN_GLOW_MS = 0.7;     /* newly-unlocked arrows pulse */
+  var SLIDE_MS = 0.30;
+  var PRESS_MS = 0.06;
+  var UNSLIDE_MS = 0.22;
+  var CHAIN_GLOW_MS = 0.7;
+  var TIME_LIMIT = 300;        /* 5:00 */
+  var LEVEL_COUNT = 700;
+  var CHALLENGE_COUNT = 25;
+  var RAINBOW = ['#1c3253', '#ff3b30', '#8a93a6', '#c4ccda'];
 
   /* ---------- state ---------- */
   var S = {
-    phase: 'menu',
+    phase: 'menu',             // menu | playing | won | lost
+    mode: 'main',              // main | random | challenge
     level: 1,
     size: 3,
     shape: 'rect',
     puzzle: null,
-    live: [],            // live[id] = {onBoard, state, t0, fromOff, toOff, rev, glowPulse, flash, shake}
+    live: [],
     removedCount: 0,
     total: 0,
     hearts: MAX_HEARTS,
-    undoStack: [],       // {id, toOff}
+    undoStack: [],
     hintsLeft: HINTS_PER_LEVEL,
     hintCooldownUntil: 0,
     hintArrowId: null,
     hintUntil: 0,
+    hintsEnabled: true,
+    assistCursor: false,
+    timerLeft: TIME_LIMIT,
+    timerEnabled: false,
+    loseReason: 'hearts',      // hearts | time
     winAt: 0,
     loseAt: 0,
-    now: 0
+    now: 0,
+    zoom: 1,
+    panX: 0,
+    panY: 0
   };
 
   var canvas, ctx, W = 0, H = 0, dpr = 1;
   var board = { x: 0, y: 0, w: 0, h: 0, cell: 0, pad: 0 };
-  var anims = [];        // sliding arrows: {id, t0, dur, from, to, rev}
-  var parts = [];        // particle pool (reused objects)
+  var anims = [];
+  var parts = [];
   var shake = 0, flash = 0;
   var lastTs = 0;
   var demoPuzzle = null;
   var debugSlideDraws = 0;
-  var RAINBOW = ['#1c3253', '#ff3b30', '#8a93a6', '#c4ccda'];
+  var pointers = {};           // active pointer map for pinch/zoom
+  var pinchDist = 0;
+  var wheelScale = 1;
 
   /* ---------- helpers ---------- */
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
@@ -72,6 +89,11 @@
     }
   }
 
+  /* screen coords → board coords (inverse of zoom/pan) */
+  function toBoardCoords(px, py) {
+    return { x: (px - S.panX) / S.zoom, y: (py - S.panY) / S.zoom };
+  }
+
   function cellCenterPx(x, y) {
     return {
       x: board.x + board.pad + (x + 0.5) * board.cell,
@@ -79,7 +101,6 @@
     };
   }
 
-  /* px distance along `dir` from a point to the board edge (+ margin) */
   function edgeDist(px, py, dir) {
     if (dir === 1) return (board.x + board.w) - px;
     if (dir === 3) return px - board.x;
@@ -87,7 +108,6 @@
     return py - board.y;
   }
 
-  /* total offset the whole path must travel to fully exit the board */
   function exitOffset(arrow) {
     var max = 0;
     for (var i = 0; i < arrow.cells.length; i++) {
@@ -98,8 +118,16 @@
   }
 
   /* ---------- level lifecycle ---------- */
-  function buildLevel(level) {
-    var puzzle = Puzzle.buildLevel(level);
+  function paramsFor(level, mode) {
+    return mode === 'challenge'
+      ? Difficulty.challengeParams(level)
+      : Difficulty.levelParams(level);
+  }
+
+  function buildLevel(level, mode) {
+    var params = paramsFor(level, mode || 'main');
+    var puzzle = Puzzle.buildLevel(level, params);
+    S.mode = mode || 'main';
     S.level = level;
     S.size = puzzle.size;
     S.shape = puzzle.shape;
@@ -113,6 +141,9 @@
     S.hintArrowId = null;
     S.winAt = 0;
     S.loseAt = 0;
+    S.loseReason = 'hearts';
+    S.timerLeft = TIME_LIMIT;
+    S.timerEnabled = (S.mode === 'challenge');
     S.live = [];
     for (var i = 0; i < puzzle.arrows.length; i++) {
       S.live.push({ onBoard: true, state: 'idle', t0: 0, fromOff: 0, toOff: 0, rev: false, glowPulse: 0, flash: 0, shake: 0 });
@@ -120,9 +151,9 @@
     layout();
     buildRenderData(puzzle);
     debugSlideDraws = 0;
+    if (global.AO.UI) global.AO.UI.updateHUD(S);
   }
 
-  /* per-arrow vector render data: base pixel points + rounded-corner path */
   function buildRenderData(puzzle) {
     for (var i = 0; i < puzzle.arrows.length; i++) {
       var a = puzzle.arrows[i];
@@ -138,26 +169,50 @@
     }
   }
 
-  function startLevel(level) {
-    buildLevel(level);
+  function startLevel(level, mode) {
+    buildLevel(level, mode);
     S.phase = 'playing';
     Sound.play('start');
-    if (global.AO.UI) { global.AO.UI.showGame(); global.AO.UI.updateHUD(S); }
+    if (global.AO.UI) {
+      global.AO.UI.showGame();
+      global.AO.UI.updateHUD(S);
+      global.AO.UI.toast('Level ' + level + ' is ready.');
+    }
   }
 
-  function restartLevel() { startLevel(S.level); }
-  function nextLevel() { startLevel(S.level + 1); }
-  function goMenu() {
-    S.phase = 'menu';
-    if (global.AO.UI) global.AO.UI.showMenu();
+  function restartLevel() { startLevel(S.level, S.mode); }
+
+  function nextLevel() {
+    if (S.mode === 'random') {
+      startLevel(randomLevel(), 'random');
+    } else if (S.mode === 'challenge') {
+      startLevel((S.level % CHALLENGE_COUNT) + 1, 'challenge');
+    } else {
+      startLevel(Math.min(LEVEL_COUNT, S.level + 1), 'main');
+    }
   }
+
+  function randomLevel() {
+    return 1 + Math.floor(Math.random() * LEVEL_COUNT);
+  }
+
+  function newBoard() {
+    startLevel(randomLevel(), S.mode === 'main' ? 'main' : S.mode);
+  }
+
+  function switchMode(mode) {
+    if (mode === 'main') startLevel(1, 'main');
+    else if (mode === 'random') startLevel(randomLevel(), 'random');
+    else startLevel(1, 'challenge');
+  }
+
+  function goMenu() { switchMode('main'); }
 
   /* ---------- player actions ---------- */
-  /* Tap an arrow by cell coordinate (pointer events + tests). */
   function tapCell(x, y) {
     if (S.phase !== 'playing' || !S.puzzle) return;
     var id = S.puzzle.board.arrowIdAt(x, y);
-    if (id == null) return; /* empty / wall — no-op */
+    if (id == null) return;
     var live = S.live[id];
     if (live.state !== 'idle') return;
     var arrow = S.puzzle.arrows[id];
@@ -175,7 +230,7 @@
     var live = S.live[id];
 
     puzzle.board.vacate(arrow);
-    live.onBoard = true; /* still drawn until the slide finishes */
+    live.onBoard = true;
     live.state = 'sliding';
     live.t0 = S.now;
     live.fromOff = 0;
@@ -192,7 +247,7 @@
     Sound.play('slide');
     haptic(8);
     if (S.removedCount >= S.total) S.winAt = S.now + SLIDE_MS + 0.30;
-    if (global.AO.UI) { global.AO.UI.updateHUD(S); global.AO.UI.updateUndo(S.undoStack.length); }
+    if (global.AO.UI) global.AO.UI.updateHUD(S);
   }
 
   function wrongTap(live) {
@@ -205,6 +260,7 @@
     Sound.play('error');
     if (S.hearts <= 0) {
       S.loseAt = S.now + 0.65;
+      S.loseReason = 'hearts';
       Sound.play('lose');
     } else {
       Sound.play('heart');
@@ -212,27 +268,19 @@
     if (global.AO.UI) global.AO.UI.updateHUD(S);
   }
 
-  /* called when a slide animation finishes */
   function onSlideDone(anim) {
     var live = S.live[anim.id];
     if (!live) return;
-    if (anim.rev) {
-      /* undo slide-back finished — arrow is home */
-      live.state = 'idle';
-      return;
-    }
+    if (anim.rev) { live.state = 'idle'; return; }
     live.state = 'gone';
     live.onBoard = false;
 
-    /* pop burst at the exit point */
     var a = S.puzzle.arrows[anim.id];
-    var head = { x: a.hx, y: a.hy };
-    spawnPop(clampExit(head.x + Puzzle.DX[a.dir] * anim.to, a.hx), clampExit(head.y + Puzzle.DY[a.dir] * anim.to, a.hy));
+    spawnPop(clampEdge(a.hx + Puzzle.DX[a.dir] * anim.to), clampEdge(a.hy + Puzzle.DY[a.dir] * anim.to));
     Sound.play('pop');
     haptic(6);
     shake = Math.max(shake, 0.12);
 
-    /* chain reaction: dependents (arrows blocked by this one) glow & pulse */
     var deps = S.puzzle.dependents[anim.id] || [];
     for (var i = 0; i < deps.length; i++) {
       var dLive = S.live[deps[i]];
@@ -240,10 +288,8 @@
     }
   }
 
-  function clampExit(v, center) {
-    /* keep the burst near the board edge even if the head flew off-screen */
-    var edge = Math.max(board.x - 20, Math.min(board.x + board.w + 20, v));
-    return edge;
+  function clampEdge(v) {
+    return Math.max(board.x - 20, Math.min(board.x + board.w + 20, v));
   }
 
   function undo() {
@@ -265,11 +311,12 @@
     S.winAt = 0;
     anims.push({ id: rec.id, t0: S.now, dur: UNSLIDE_MS, from: rec.toOff, to: 0, rev: true });
     Sound.play('undo');
-    if (global.AO.UI) { global.AO.UI.updateHUD(S); global.AO.UI.updateUndo(S.undoStack.length); }
+    if (global.AO.UI) global.AO.UI.updateHUD(S);
   }
 
   function hint() {
     if (S.phase !== 'playing') return;
+    if (!S.hintsEnabled) return;
     if (S.hintsLeft <= 0 || S.now < S.hintCooldownUntil) return;
     var hid = Hints.findNext(S);
     if (hid == null) return;
@@ -281,11 +328,15 @@
     if (global.AO.UI) global.AO.UI.updateHUD(S);
   }
 
-  /* ---------- particles (pooled) ---------- */
-  function spawn(p) {
-    if (parts.length >= 320) parts.shift();
-    parts.push(p);
+  function setHintsEnabled(on) {
+    S.hintsEnabled = on;
+    if (!on) S.hintArrowId = null;
   }
+
+  function setAssistCursor(on) { S.assistCursor = on; }
+
+  /* ---------- particles ---------- */
+  function spawn(p) { if (parts.length >= 320) parts.shift(); parts.push(p); }
 
   function spawnTrail(px, py, dir) {
     var back = -dir;
@@ -343,7 +394,11 @@
     ctx = canvas.getContext('2d');
     resize();
     global.addEventListener('resize', resize);
-    canvas.addEventListener('pointerdown', onPointer);
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', onPointerUp);
+    canvas.addEventListener('pointercancel', onPointerUp);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
     document.addEventListener('pointerdown', function once() {
       if (Sound.unlock) Sound.unlock();
     }, { once: true });
@@ -366,8 +421,8 @@
 
   function layout() {
     if (!S.size) return;
-    var availW = W * 0.94;
-    var availH = H * 0.84;
+    var availW = W * 0.92;
+    var availH = H * 0.78;
     var cell = Math.floor(Math.min(availW, availH) / (S.size + 1.6));
     cell = Math.min(cell, 96);
     var pad = Math.round(cell * 0.7);
@@ -376,21 +431,72 @@
     board.w = S.size * cell + pad * 2;
     board.h = S.size * cell + pad * 2;
     board.x = Math.round((W - board.w) / 2);
-    board.y = Math.round((H - board.h) / 2) + 6;
+    board.y = Math.round((H - board.h) / 2) + 8;
   }
 
-  function onPointer(e) {
-    if (S.phase !== 'playing') return;
-    var rect = canvas.getBoundingClientRect();
-    var px = (e.clientX - rect.left) * (W / rect.width);
-    var py = (e.clientY - rect.top) * (H / rect.height);
-    var x = Math.floor((px - board.x - board.pad) / board.cell);
-    var y = Math.floor((py - board.y - board.pad) / board.cell);
-    var id = S.puzzle.board.arrowIdAt(x, y);
-    if (id != null) {
-      e.preventDefault();
-      tapCell(x, y);
+  /* ---------- input: tap / pinch-zoom / wheel-zoom ---------- */
+  function onPointerDown(e) {
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY, moved: 0 };
+    if (Object.keys(pointers).length === 2) {
+      var ids = Object.keys(pointers);
+      pinchDist = Math.hypot(pointers[ids[0]].x - pointers[ids[1]].x,
+        pointers[ids[0]].y - pointers[ids[1]].y);
     }
+  }
+
+  function onPointerMove(e) {
+    var p = pointers[e.pointerId];
+    if (!p) return;
+    var dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.moved += Math.abs(dx) + Math.abs(dy);
+    p.x = e.clientX; p.y = e.clientY;
+
+    var ids = Object.keys(pointers);
+    if (ids.length === 2) {
+      var p1 = pointers[ids[0]], p2 = pointers[ids[1]];
+      var dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+      if (pinchDist > 0) {
+        var scale = dist / pinchDist;
+        setZoom(S.zoom * scale, (p1.x + p2.x) / 2, (p1.y + p2.y) / 2);
+      }
+      pinchDist = dist;
+    }
+  }
+
+  function onPointerUp(e) {
+    var p = pointers[e.pointerId];
+    delete pointers[e.pointerId];
+    if (Object.keys(pointers).length < 2) pinchDist = 0;
+    /* tap if the pointer barely moved */
+    if (p && p.moved < 10 && S.phase === 'playing') {
+      var rect = canvas.getBoundingClientRect();
+      var sx = (e.clientX - rect.left) * (W / rect.width);
+      var sy = (e.clientY - rect.top) * (H / rect.height);
+      var bc = toBoardCoords(sx, sy);
+      var x = Math.floor((bc.x - board.x - board.pad) / board.cell);
+      var y = Math.floor((bc.y - board.y - board.pad) / board.cell);
+      var id = S.puzzle.board.arrowIdAt(x, y);
+      if (id != null) tapCell(x, y);
+    }
+  }
+
+  function onWheel(e) {
+    e.preventDefault();
+    var rect = canvas.getBoundingClientRect();
+    var sx = (e.clientX - rect.left) * (W / rect.width);
+    var sy = (e.clientY - rect.top) * (H / rect.height);
+    var factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    setZoom(S.zoom * factor, sx, sy);
+  }
+
+  function setZoom(z, cx, cy) {
+    var nz = clamp(z, 0.4, 3);
+    if (nz === S.zoom) return;
+    /* zoom around screen point (cx, cy) */
+    var k = nz / S.zoom;
+    S.panX = cx - (cx - S.panX) * k;
+    S.panY = cy - (cy - S.panY) * k;
+    S.zoom = nz;
   }
 
   /* ---------- theme ---------- */
@@ -418,12 +524,7 @@
   function drawArrowState(id, alphaMul, offsetX, offsetY) {
     var a = S.puzzle.arrows[id];
     var live = S.live[id];
-    var opts = {
-      alpha: alphaMul,
-      ox: offsetX,
-      oy: offsetY,
-      headScale: 1
-    };
+    var opts = { alpha: alphaMul, ox: offsetX, oy: offsetY, headScale: 1, color: Renderer.arrowColor(id) };
     if (live.glowPulse && S.now - live.glowPulse < CHAIN_GLOW_MS) {
       var gt = (S.now - live.glowPulse) / CHAIN_GLOW_MS;
       var gv = Math.sin(gt * Math.PI);
@@ -436,54 +537,76 @@
     var live = S.live[anim.id];
     var a = S.puzzle.arrows[anim.id];
     var t = clamp((S.now - anim.t0) / anim.dur, 0, 1);
+    var off, dx, dy, alpha;
 
-    var off;
     if (anim.rev) {
-      /* undo: slide back from `from` to 0, ease-out (fast start, soft landing) */
       off = anim.from * (1 - easeOutCubic(t));
+      dx = Puzzle.DX[a.dir] * off;
+      dy = Puzzle.DY[a.dir] * off;
+      alpha = 1;
     } else {
-      /* press phase: small scale-up before motion */
       if (t < PRESS_MS / SLIDE_MS) {
         var p = t / (PRESS_MS / SLIDE_MS);
-        var s = 1 + 0.12 * p;
         Renderer.drawArrow(ctx, a.path, a.hx, a.hy, a.dir, board.cell,
-          { alpha: 1, ox: 0, oy: 0, headScale: s });
+          { alpha: 1, ox: 0, oy: 0, headScale: 1 + 0.12 * p });
         return;
       }
-      /* accelerate: ease-in-cubic */
       off = anim.to * easeInCubic(t);
-    }
-
-    var dx = Puzzle.DX[a.dir] * off;
-    var dy = Puzzle.DY[a.dir] * off;
-    var alpha = anim.rev ? 1 : 1 - Math.max(0, (t - 0.85)) * 6.6;
-
-    /* motion blur ghosts (forward travel only) */
-    if (!anim.rev && t > 0.05) {
-      for (var g = 1; g <= 3; g++) {
-        var gOff = off - g * board.cell * 0.22 * t;
-        if (gOff <= 0) continue;
-        Renderer.drawArrow(ctx, a.path, a.hx, a.hy, a.dir, board.cell, {
-          alpha: alpha * (0.20 - g * 0.05),
-          ox: dx - Puzzle.DX[a.dir] * (off - gOff),
-          oy: dy - Puzzle.DY[a.dir] * (off - gOff),
-          shadow: false
-        });
+      dx = Puzzle.DX[a.dir] * off;
+      dy = Puzzle.DY[a.dir] * off;
+      alpha = 1 - Math.max(0, (t - 0.85)) * 6.6;
+      /* motion blur ghosts */
+      if (t > 0.05) {
+        for (var g = 1; g <= 3; g++) {
+          var gOff = off - g * board.cell * 0.22 * t;
+          if (gOff <= 0) continue;
+          Renderer.drawArrow(ctx, a.path, a.hx, a.hy, a.dir, board.cell, {
+            alpha: alpha * (0.20 - g * 0.05),
+            ox: dx - Puzzle.DX[a.dir] * (off - gOff),
+            oy: dy - Puzzle.DY[a.dir] * (off - gOff),
+            shadow: false
+          });
+        }
       }
     }
 
     drawArrowState(anim.id, alpha, dx, dy);
 
-    /* particle trail from every other path cell */
-    if (Math.random() < 0.9) {
+    if (!anim.rev && Math.random() < 0.9) {
       var step = 2;
       for (var i = 0; i < a.pts.length; i += step) {
-        if (Math.random() < 0.45) {
-          spawnTrail(a.pts[i].x + dx, a.pts[i].y + dy, a.dir);
-        }
+        if (Math.random() < 0.45) spawnTrail(a.pts[i].x + dx, a.pts[i].y + dy, a.dir);
       }
     }
     debugSlideDraws++;
+  }
+
+  function drawAssistCursor() {
+    if (!S.assistCursor || S.phase !== 'playing') return;
+    var id = Hints.findNext(S);
+    if (id == null) return;
+    var a = S.puzzle.arrows[id];
+    var pulse = 0.5 + 0.5 * Math.sin(S.now * 6);
+    var c = cellCenterPx(a.end.x, a.end.y);
+    ctx.save();
+    ctx.globalAlpha = 0.45 + pulse * 0.35;
+    ctx.strokeStyle = Renderer.palette().hint;
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([board.cell * 0.18, board.cell * 0.14]);
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, board.cell * (0.55 + pulse * 0.1), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    /* little direction chevron inside */
+    var dir = a.dir, off = board.cell * 0.3;
+    ctx.globalAlpha = 0.8;
+    ctx.strokeStyle = Renderer.palette().hint;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(c.x - Puzzle.DX[dir] * off * 0.4, c.y - Puzzle.DY[dir] * off * 0.4);
+    ctx.lineTo(c.x + Puzzle.DX[dir] * off, c.y + Puzzle.DY[dir] * off);
+    ctx.stroke();
+    ctx.restore();
   }
 
   function drawParticles() {
@@ -516,7 +639,6 @@
     if (!live || !live.onBoard || live.state !== 'idle') return;
     var a = S.puzzle.arrows[id];
     var pulse = 0.5 + 0.5 * Math.sin(S.now * 9);
-    /* red ray cells */
     var ray = S.puzzle.board.headRayCells(a.end.x, a.end.y, a.dir, a.id);
     var rayPts = [{ x: a.hx, y: a.hy }];
     for (var i = 0; i < ray.length; i++) {
@@ -551,7 +673,18 @@
     lastTs = now;
     S.now = now;
 
-    /* ---- update animations ---- */
+    /* timer (challenge mode) */
+    if (S.phase === 'playing' && S.timerEnabled) {
+      S.timerLeft = Math.max(0, S.timerLeft - dt);
+      if (S.timerLeft <= 0) {
+        S.phase = 'lost';
+        S.loseReason = 'time';
+        Sound.play('lose');
+        if (global.AO.UI) global.AO.UI.showLose(S);
+      }
+    }
+
+    /* animations */
     for (var i = anims.length - 1; i >= 0; i--) {
       var a = anims[i];
       if (now - a.t0 >= a.dur) {
@@ -560,7 +693,7 @@
       }
     }
 
-    /* ---- update particles ---- */
+    /* particles */
     for (var j = parts.length - 1; j >= 0; j--) {
       var p = parts[j];
       p.age += dt;
@@ -572,7 +705,7 @@
       p.vy *= 0.985;
     }
 
-    /* ---- update cell feedback ---- */
+    /* live feedback decay */
     if (S.live) {
       for (var k = 0; k < S.live.length; k++) {
         var L = S.live[k];
@@ -583,7 +716,7 @@
     if (shake > 0) shake = Math.max(0, shake - dt * 2.2);
     if (flash > 0) flash = Math.max(0, flash - dt * 3);
 
-    /* ---- phase transitions ---- */
+    /* phase transitions */
     if (S.phase === 'playing' && S.winAt && now >= S.winAt && !anims.length) {
       S.phase = 'won';
       Sound.play('win');
@@ -591,38 +724,40 @@
       spawnConfetti(board.x + board.w / 2, board.y + board.h / 2, 60);
       if (global.AO.UI) {
         global.AO.UI.updateHUD(S);
-        global.AO.UI.showWin(S.level, S.hearts);
+        global.AO.UI.showWin(S);
       }
     }
     if (S.phase === 'playing' && S.loseAt && now >= S.loseAt) {
       S.phase = 'lost';
-      if (global.AO.UI) global.AO.UI.showLose(S.level);
+      if (global.AO.UI) global.AO.UI.showLose(S);
     }
     if (S.phase === 'playing' && S.hintArrowId != null && now >= S.hintUntil) {
       S.hintArrowId = null;
       if (global.AO.UI) global.AO.UI.updateHUD(S);
     }
 
-    /* ---- draw ---- */
+    /* draw */
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = Renderer.palette().bg;
+    ctx.fillRect(0, 0, W, H);
 
     var shx = 0, shy = 0;
     if (shake > 0) {
       shx = (Math.random() - 0.5) * 7 * shake;
       shy = (Math.random() - 0.5) * 7 * shake;
     }
-    ctx.save();
-    ctx.translate(shx, shy);
 
-    if (S.phase === 'menu') {
+    ctx.save();
+    ctx.translate(S.panX + shx, S.panY + shy);
+    ctx.scale(S.zoom, S.zoom);
+
+    if (S.phase === 'menu' && demoPuzzle) {
       drawDemo();
     } else if (S.puzzle) {
       drawGrid();
-      /* idle arrows first, then sliding arrows on top */
       for (var m = 0; m < S.live.length; m++) {
         if (S.live[m].onBoard && S.live[m].state === 'idle') {
-          /* subtle flash overlay for wrong taps */
           if (S.live[m].flash > 0) {
             var a2 = S.puzzle.arrows[m];
             ctx.save();
@@ -638,6 +773,7 @@
         }
       }
       drawHintHighlight();
+      drawAssistCursor();
       for (var n = 0; n < anims.length; n++) drawSliding(anims[n]);
     }
 
@@ -659,8 +795,12 @@
     restartLevel: restartLevel,
     nextLevel: nextLevel,
     goMenu: goMenu,
+    switchMode: switchMode,
+    newBoard: newBoard,
     undo: undo,
     hint: hint,
+    setHintsEnabled: setHintsEnabled,
+    setAssistCursor: setAssistCursor,
     tapCell: tapCell,
     applyTheme: applyTheme,
     setup: setup,
@@ -670,12 +810,12 @@
     debugParts: function () { return parts; },
     debugSlideDraws: function () { return debugSlideDraws; },
     debugRemovable: function () { return Hints.findRemovable(S); },
-    MAX_HEARTS: MAX_HEARTS
+    MAX_HEARTS: MAX_HEARTS,
+    LEVEL_COUNT: LEVEL_COUNT,
+    CHALLENGE_COUNT: CHALLENGE_COUNT
   };
 
-  /* decorative demo puzzle for the menu screen */
   (function initDemo() {
-    var lv = Puzzle.buildLevel(1);
-    demoPuzzle = lv;
+    demoPuzzle = Puzzle.buildLevel(1);
   })();
 })(typeof window !== 'undefined' ? window : globalThis);
