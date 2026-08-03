@@ -249,8 +249,20 @@
 
   /* ---------- generator ---------- */
   /* Reverse-construction generator. Always solvable.
-   * Only playable (non-wall) cells receive arrows; walls act as exit edges. */
-  function generate(size, density, seed, shape) {
+   * Only playable (non-wall) cells receive arrows; walls act as exit edges.
+   *
+   * Two complexity levers:
+   *   1. INWARD DIRECTION BIAS (`opts.inwardBias`): when placing an arrow we try
+   *      directions pointing toward the board center first. Inward-pointing
+   *      arrows are naturally blocked at the start of the level, so fewer
+   *      arrows are instantly removable => deeper dependency chains.
+   *   2. START-RATIO FILTER (`opts.maxStartRatio`): if too many arrows are
+   *      removable at the start (ratio = startRemovable / total), re-roll with
+   *      a derived seed (bounded retries). */
+  function generate(size, density, seed, shape, opts) {
+    opts = opts || {};
+    var tries = opts._tries || 0;
+    var bias = opts.inwardBias || 0;
     var rng = mulberry32(seed);
     var mask = makeMask(size, shape || 'rect');
     var grid = emptyGrid(size);
@@ -262,6 +274,7 @@
     var playable = playableCount(mask);
     var target = Math.round(playable * density);
     var minArrows = Math.min(target, Math.max(3, Math.floor(playable * 0.45)));
+    var ccx = (size - 1) / 2, ccy = (size - 1) / 2;
 
     /* pool of empty playable cells */
     var empty = [];
@@ -274,7 +287,16 @@
     while (placement.length < target && empty.length > 0 && attempts++ < 8000) {
       var cell = empty.pop();
       var dirs = [UP, RIGHT, DOWN, LEFT];
-      shuffle(dirs, rng);
+      /* sort directions: strongest "toward center" first */
+      if (bias > 0) {
+        dirs.sort(function (a, b) {
+          var wa = 1 + bias * Math.max(0, (ccx - cell.x) * DX[a] + (ccy - cell.y) * DY[a]) / (size / 2);
+          var wb = 1 + bias * Math.max(0, (ccx - cell.x) * DX[b] + (ccy - cell.y) * DY[b]) / (size / 2);
+          return wb - wa;
+        });
+      } else {
+        shuffle(dirs, rng);
+      }
       var placedDir = -1;
       for (var i = 0; i < dirs.length; i++) {
         if (pathClear(grid, size, cell.x, cell.y, dirs[i])) { placedDir = dirs[i]; break; }
@@ -284,34 +306,59 @@
       placement.push({ x: cell.x, y: cell.y, dir: placedDir });
     }
 
-    if (placement.length < minArrows) {
-      /* Too sparse — retry with a fresh derived seed (still deterministic per level) */
-      return generate(size, density, (seed * 2654435761 + 97) >>> 0, shape);
+    /* too sparse (density target not reached) — retry with lower density, bounded */
+    if (placement.length < minArrows && tries < 16) {
+      return generate(size, Math.max(0.40, density - 0.02), (seed * 2654435761 + 97) >>> 0, shape,
+        { _tries: tries + 1, maxStartRatio: opts.maxStartRatio, maxTries: opts.maxTries, inwardBias: bias });
+    }
+    if (placement.length < 2) {
+      /* last-resort safety: never return an unplayable board */
+      return generate(size, Math.max(0.40, density - 0.05), (seed * 2654435761 + 97) >>> 0, shape,
+        { _tries: tries + 1, maxStartRatio: opts.maxStartRatio, maxTries: opts.maxTries, inwardBias: bias });
     }
 
-    return {
+    var board = {
       size: size,
       shape: shape || 'rect',
       mask: mask,
       grid: grid,
       solution: placement.slice().reverse() /* valid removal order */
     };
+
+    /* complexity filter: too many instantly-removable arrows = trivial level */
+    if (opts.maxStartRatio != null && tries < (opts.maxTries || 14)) {
+      var startRemovable = removableArrows(grid, size).length;
+      if (startRemovable / placement.length > opts.maxStartRatio) {
+        return generate(size, density, (seed * 2654435761 + 97) >>> 0, shape,
+          { _tries: tries + 1, maxStartRatio: opts.maxStartRatio, maxTries: opts.maxTries, inwardBias: bias });
+      }
+    }
+
+    return board;
   }
 
-  /* Difficulty curve by level number — matches the original: rectangular early,
-   * then circular, diamond, heart, knight, cross as the game deepens. */
+  /* Difficulty curve by level number.
+   * - Board sizes/shapes are ordered so PLAYABLE CELLS GROW every level:
+   *   3x3(9) → 4x4(16) → 5x5(25) → 6x6(36) → circle8(44) → heart8(52) →
+   *   cross9(65) → rect9(81) → rect10(100)
+   * - Density ramps WITHIN each band so every consecutive level is denser
+   *   (more arrows each level), staying below each board's fill saturation.
+   * - inwardBias ≈ 0.6 makes most arrows point inward => few obvious first
+   *   moves; maxStartRatio shrinks over time => deeper dependency chains. */
   function levelParams(level) {
-    if (level < 3)   return { size: 3, shape: 'rect', density: 0.55 };
-    if (level < 6)   return { size: 4, shape: 'rect', density: 0.60 };
-    if (level < 11)  return { size: 5, shape: 'rect', density: 0.62 };
-    if (level < 19)  return { size: 6, shape: 'circle', density: 0.62 };
-    if (level < 31)  return { size: 7, shape: 'diamond', density: 0.62 };
-    if (level < 46)  return { size: 8, shape: 'heart', density: 0.60 };
-    if (level < 61)  return { size: 9, shape: 'knight', density: 0.60 };
-    if (level < 81)  return { size: 9, shape: 'cross', density: 0.60 };
-    if (level < 101) return { size: 9, shape: 'rect', density: 0.66 };
-    return { size: Math.min(10, 9 + Math.floor((level - 100) / 50)), shape: 'rect',
-             density: Math.min(0.70, 0.64 + Math.floor((level - 100) / 50) * 0.02) };
+    /* maxStartRatio values are calibrated to what inward-bias construction can
+     * actually achieve (bigger boards have a higher structural floor). */
+    if (level < 3)   return { size: 3, shape: 'rect', density: 0.72 + (level - 1) * 0.06, maxStartRatio: 0.50 };
+    if (level < 6)   return { size: 4, shape: 'rect', density: 0.70 + (level - 3) * 0.02, maxStartRatio: 0.40 };
+    if (level < 11)  return { size: 5, shape: 'rect', density: 0.68 + (level - 6) * 0.015, maxStartRatio: 0.38 };
+    if (level < 19)  return { size: 6, shape: 'rect', density: 0.66 + (level - 11) * 0.01, maxStartRatio: 0.36 };
+    if (level < 31)  return { size: 8, shape: 'circle', density: 0.64 + (level - 19) * 0.006, maxStartRatio: 0.35 };
+    if (level < 46)  return { size: 8, shape: 'heart', density: 0.62 + (level - 31) * 0.005, maxStartRatio: 0.34 };
+    if (level < 61)  return { size: 9, shape: 'cross', density: 0.62 + (level - 46) * 0.004, maxStartRatio: 0.34 };
+    if (level < 81)  return { size: 9, shape: 'rect', density: 0.63 + (level - 61) * 0.003, maxStartRatio: 0.37 };
+    if (level < 101) return { size: 10, shape: 'rect', density: 0.61 + (level - 81) * 0.002, maxStartRatio: 0.40 };
+    return { size: 10, shape: 'rect', density: Math.min(0.64, 0.63 + Math.floor((level - 100) / 20) * 0.004),
+             maxStartRatio: 0.39 };
   }
 
   function hashStr(s) {
@@ -323,7 +370,8 @@
   function buildLevel(level) {
     var p = levelParams(level);
     var seed = (level * 2654435761) ^ (p.size * 48271) ^ hashStr(p.shape) ^ Math.round(p.density * 1000);
-    return generate(p.size, p.density, seed >>> 0, p.shape);
+    return generate(p.size, p.density, seed >>> 0, p.shape,
+      { maxStartRatio: p.maxStartRatio, maxTries: 14, inwardBias: 0.6 });
   }
 
   /* Next arrow to remove per the known solution (used by the hint system) */

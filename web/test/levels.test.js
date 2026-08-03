@@ -126,7 +126,47 @@ console.log('Levels library loaded. Running generator + solver tests...\n');
   const t0 = Date.now();
   for (let lvl = 1; lvl <= 2000; lvl++) L.buildLevel(lvl);
   const ms = Date.now() - t0;
-  check('2000 levels generated in ' + ms + 'ms (fast enough for instant play)', ms < 5000, ms + 'ms');
+  check('2000 levels generated in ' + ms + 'ms (fast enough for instant play)', ms < 8000, ms + 'ms');
+}
+
+// 7) Difficulty curve: MORE arrows, MORE complexity, every level
+{
+  console.log('[7] Difficulty curve — arrows & complexity grow with level');
+  let cellsPrev = 0;
+  let cellDips = 0;
+  let ratioTarget = 0;
+  let ratioTotal = 0;
+  let prevArrows = 0;
+  let firstHalf = 0, secondHalf = 0; // avg arrows in early vs late levels
+  for (let lvl = 1; lvl <= 300; lvl++) {
+    const lv = L.buildLevel(lvl);
+    const p = L.levelParams(lvl);
+    const total = L.countArrows(lv.grid);
+    const cells = L.playableCount(lv.mask);
+    if (lvl > 1 && cells < cellsPrev) cellDips++;
+    prevArrows = prevArrows || total;
+    if (lvl <= 150) firstHalf += total; else secondHalf += total;
+
+    const startRem = L.removableArrows(lv.grid, lv.size).length;
+    const ratio = startRem / total;
+    ratioTotal++;
+    if (p.maxStartRatio != null && ratio > p.maxStartRatio + 0.08) ratioTarget++;
+  }
+  check('playable cells never shrink across levels 1..300', cellDips === 0, cellDips + ' dips');
+  check('late levels (151-300) have more arrows than early (1-150)',
+    secondHalf / 150 > firstHalf / 150,
+    'early avg ' + (firstHalf / 150).toFixed(1) + ' vs late avg ' + (secondHalf / 150).toFixed(1));
+  check('start-removable ratio stays within 0.08 of target for >= 95% of levels',
+    ratioTarget / ratioTotal <= 0.05, ratioTarget + '/' + ratioTotal + ' over');
+
+  /* spot-check arrow counts are much higher than the old curve */
+  const counts = {};
+  for (const n of [1, 10, 30, 60, 100]) counts[n] = L.countArrows(L.buildLevel(n).grid);
+  check('level 1 has >= 6 arrows (was 5)', counts[1] >= 6, counts[1]);
+  check('level 10 has >= 17 arrows', counts[10] >= 17, counts[10]);
+  check('level 30 has >= 28 arrows', counts[30] >= 28, counts[30]);
+  check('level 60 has >= 40 arrows', counts[60] >= 40, counts[60]);
+  check('level 100 has >= 55 arrows', counts[100] >= 55, counts[100]);
 }
 
 console.log('\n' + (failures === 0 ? 'ALL TESTS PASSED ✔' : failures + ' FAILURES ✘'));

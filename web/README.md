@@ -17,7 +17,10 @@ Or just open `index.html` directly in a browser.
 
 - ✅ **Minimalist UI matching "Arrows – Puzzle Escape" (Lessmore)**: thin black arrows on white, 5 red hearts, "Level N" indicator, red-highlighted hint paths, light + dark themes
 - ✅ **Shaped boards like the original**: rectangular early, then circular (11+), diamond (19+), heart (31+), knight (46+), cross (61+)
-- ✅ Procedural level generator (reverse-construction, **guaranteed solvable**) + difficulty curve (3×3 → 10×10, 1000s of levels)
+- ✅ **Procedural level generator** (reverse-construction, **guaranteed solvable**) with a **steeper difficulty curve**:
+  - **More arrows**: level 1 has 6 arrows → level 10: 19 → level 30: 31 → level 60: 44 → level 100+: 64
+  - **More complexity every level**: board cells grow monotonically (3×3=9 → 4×4=16 → 5×5=25 → 6×6=36 → circle 8×8=44 → heart 8×8=52 → cross 9×9=65 → 9×9=81 → 10×10=100), density ramps within each band, and an **inward-direction bias** + **start-ratio filter** force deep dependency chains (fewer obvious first moves) as levels progress
+  - All 600+ levels still verified solvable by an independent exact solver
 - ✅ Core rules: tap an arrow → it slides out if its path to the edge is clear; blocked tap = lose a heart (5/level)
 - ✅ Hearts, hints (highlight safe arrow + its red path), undo (3/level), restart, next level
 - ✅ Win/lose flows, level select with progress + stars
