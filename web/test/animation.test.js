@@ -181,6 +181,28 @@ runFrames(14); // +224ms → total elapsed ~368ms
   }
 }
 
+/* --- undo: animated slide-back --- */
+{
+  const S = AO.Game.getState();
+  const before = removableCells();
+  const tgt = L.removableArrows(S.grid, S.size)[0];
+  if (tgt) {
+    AO.Game.tapCell(tgt.x, tgt.y);
+    runFrames(22); /* wait for exit (~300 ms) */
+    const cell = S.cells[tgt.y][tgt.x];
+    check('arrow fully exited before undo', cell.state === 'gone');
+    const animsBefore = AO.Game.debugAnims().length;
+    AO.Game.undo();
+    const undoAnims = AO.Game.debugAnims();
+    check('undo creates a reverse (slide-back) animation', undoAnims.length === animsBefore + 1 && undoAnims[undoAnims.length - 1].rev === true);
+    runFrames(18); /* finish slide-back (~220 ms) */
+    check('arrow restored to idle after slide-back', S.cells[tgt.y][tgt.x].state === 'idle');
+    check('grid restored after undo', S.grid[tgt.y][tgt.x] === tgt.dir);
+  } else {
+    console.log('  (no removable arrow to undo — skipping undo anim check)');
+  }
+}
+
 /* --- wrong tap still shakes + haptics --- */
 {
   const S = AO.Game.getState();

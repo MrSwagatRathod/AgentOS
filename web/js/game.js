@@ -29,7 +29,8 @@
       confetti: ['#151515', '#ff3b30', '#8a8a8a', '#c8c8c8'],
       shadow: 'rgba(0,0,0,0.10)',
       glow: 'rgba(255,59,48,0.30)',
-      trail: 'rgba(21,21,21,0.35)'
+      ring: 'rgba(21,21,21,0.28)',
+      trail: 'rgba(21,21,21,0.40)'
     },
     dark: {
       bg: '#0b0b0d',
@@ -42,7 +43,8 @@
       confetti: ['#f5f5f7', '#ff453a', '#8a8a90', '#55555c'],
       shadow: 'rgba(0,0,0,0.5)',
       glow: 'rgba(255,69,58,0.35)',
-      trail: 'rgba(245,245,247,0.4)'
+      ring: 'rgba(245,245,247,0.35)',
+      trail: 'rgba(245,245,247,0.45)'
     }
   };
 
@@ -53,10 +55,11 @@
   var HINT_DURATION = 9000;
 
   /* ---- exit animation timing (spec: total ≈250-350ms) ---- */
-  var PRESS_MS = 0.055;        /* selection: 50-60 ms */
+  var PRESS_MS = 0.06;         /* selection: 50-60 ms */
   var TRAVEL_MS = 0.24;        /* exit travel: 220-280 ms, ease-in cubic */
-  var SLIDE_TOTAL = PRESS_MS + TRAVEL_MS;   /* ≈295 ms */
-  var CHAIN_GLOW_MS = 0.6;     /* newly-unlocked arrows pulse for 600 ms */
+  var SLIDE_TOTAL = PRESS_MS + TRAVEL_MS;   /* ≈300 ms */
+  var CHAIN_GLOW_MS = 0.7;     /* newly-unlocked arrows pulse for 700 ms */
+  var UNSLIDE_MS = 0.22;       /* undo: arrow slides back in */
 
   /* ---------- mutable game state ---------- */
   var S = {
@@ -204,11 +207,11 @@
       cell.state = 'sliding';
       cell.t0 = S.now;
       S.removed++;
-      S.undoStack.push({ x: x, y: y, dir: dir });
-      if (S.hintArrow && S.hintArrow.x === x && S.hintArrow.y === y) S.hintArrow = null;
-
       var c = cellCenter(x, y);
       var end = slideEnd(c.x, c.y, dir);
+      S.undoStack.push({ x: x, y: y, dir: dir, fromX: c.x, fromY: c.y, toX: end.x, toY: end.y });
+      if (S.hintArrow && S.hintArrow.x === x && S.hintArrow.y === y) S.hintArrow = null;
+
       anims.push({
         type: 'slide', x: x, y: y, dir: dir,
         fromX: c.x, fromY: c.y, toX: end.x, toY: end.y,
@@ -242,6 +245,13 @@
   /* called when an arrow finishes its exit animation */
   function onSlideDone(a) {
     var cell = S.cells[a.y][a.x];
+
+    if (a.rev) {
+      /* undo slide-back finished — arrow is home */
+      if (cell) cell.state = 'idle';
+      return;
+    }
+
     if (cell) cell.state = 'gone';
 
     /* pop burst at the exit point (just outside the board) */
@@ -266,9 +276,16 @@
     var m = S.undoStack.pop();
     S.grid[m.y][m.x] = m.dir;
     var cell = S.cells[m.y][m.x];
-    cell.state = 'idle';
-    cell.t0 = 0;
     cell.glowPulse = 0;
+    /* animated slide-back from the exit point to the cell */
+    cell.state = 'sliding';
+    cell.t0 = S.now;
+    anims.push({
+      type: 'slide', rev: true,
+      x: m.x, y: m.y, dir: m.dir,
+      fromX: m.fromX, fromY: m.fromY, toX: m.toX, toY: m.toY,
+      t0: S.now, dur: UNSLIDE_MS
+    });
     S.removed--;
     S.winAt = 0;
     Sound.play('undo');
@@ -290,38 +307,47 @@
 
   /* ---------- particles ---------- */
   function pushParticle(p) {
-    if (parts.length < 160) parts.push(p);
+    if (parts.length < 240) parts.push(p);
   }
 
   function spawnTrail(x, y, dir, cell) {
     var back = -dir;
     pushParticle({
-      x: x + (Math.random() - 0.5) * cell * 0.3,
-      y: y + (Math.random() - 0.5) * cell * 0.3,
-      vx: Levels.DX[back] * (30 + Math.random() * 60) + (Math.random() - 0.5) * 40,
-      vy: Levels.DY[back] * (30 + Math.random() * 60) + (Math.random() - 0.5) * 40,
-      life: 0.16 + Math.random() * 0.08,   /* trail fades over 150-200 ms */
+      x: x + (Math.random() - 0.5) * cell * 0.35,
+      y: y + (Math.random() - 0.5) * cell * 0.35,
+      vx: Levels.DX[back] * (40 + Math.random() * 90) + (Math.random() - 0.5) * 50,
+      vy: Levels.DY[back] * (40 + Math.random() * 90) + (Math.random() - 0.5) * 50,
+      life: 0.16 + Math.random() * 0.10,   /* trail fades over 150-250 ms */
       age: 0,
-      size: cell * (0.10 + Math.random() * 0.08),
+      size: cell * (0.12 + Math.random() * 0.10),
       color: palette.trail,
       trail: true
     });
   }
 
   function spawnPop(x, y, dir) {
-    var n = 6;
     var back = -dir;
+    /* expanding shockwave ring */
+    pushParticle({
+      x: x, y: y, vx: 0, vy: 0,
+      life: 0.24, age: 0,
+      size: board.cell * 0.9,
+      color: palette.ring,
+      ring: true
+    });
+    /* burst */
+    var n = 10;
     for (var i = 0; i < n; i++) {
       var ang = Math.random() * Math.PI * 2;
-      var sp = 30 + Math.random() * 110;
+      var sp = 40 + Math.random() * 150;
       pushParticle({
         x: x + (Math.random() - 0.5) * board.cell * 0.3,
         y: y + (Math.random() - 0.5) * board.cell * 0.3,
-        vx: Levels.DX[back] * (40 + Math.random() * 50) + Math.cos(ang) * sp * 0.7,
-        vy: Levels.DY[back] * (40 + Math.random() * 50) + Math.sin(ang) * sp * 0.7,
-        life: 0.22 + Math.random() * 0.18,
+        vx: Levels.DX[back] * (50 + Math.random() * 60) + Math.cos(ang) * sp * 0.7,
+        vy: Levels.DY[back] * (50 + Math.random() * 60) + Math.sin(ang) * sp * 0.7,
+        life: 0.24 + Math.random() * 0.2,
         age: 0,
-        size: 1.4 + Math.random() * 2.2,
+        size: 1.6 + Math.random() * 2.6,
         color: palette.confetti[Math.floor(Math.random() * palette.confetti.length)]
       });
     }
@@ -445,17 +471,18 @@
     ctx.restore();
   }
 
-  /* motion-blur ghosts trailing behind a fast-moving arrow */
+  /* motion-blur ghosts trailing behind a fast-moving arrow.
+   * 4 staggered ghosts, strongest right after launch (fastest acceleration). */
   function drawBlurGhosts(a, cx, cy, dir, t, cell, color) {
     var back = -dir;
-    for (var i = 1; i <= 3; i++) {
-      var off = t * cell * 0.10 * i;
-      var alpha = (1 - i / 3) * 0.22 * t;
+    for (var i = 1; i <= 4; i++) {
+      var off = t * cell * (0.10 + i * 0.055);
+      var alpha = (1 - i / 5) * 0.34 * t;
       if (alpha <= 0.02) continue;
       drawArrowShape(
         cx - Levels.DX[back] * off,
         cy - Levels.DY[back] * off,
-        dir, cell, color, alpha, 0.96, 0.96, 0
+        dir, cell, color, alpha, 0.94, 0.94, 0
       );
     }
   }
@@ -502,15 +529,35 @@
     var elapsed = S.now - a.t0;
     var cx, cy, sx, sy, rot, alpha;
 
+    /* ---- UNDO: arrow slides back from the exit point to its cell ---- */
+    if (a.rev) {
+      var rt = clamp(elapsed / a.dur, 0, 1);
+      var re = 1 - Math.pow(1 - rt, 3);           /* ease-out cubic */
+      cx = lerp(a.toX, a.fromX, re);
+      cy = lerp(a.toY, a.fromY, re);
+      var rs = 0.85 + 0.15 * rt;                  /* grows into place */
+      drawArrowShape(cx, cy, a.dir, u, palette.arrow, rt, rs, rs, 0);
+      return;
+    }
+
     if (elapsed < PRESS_MS) {
-      /* 1. SELECTION: scale 1.0 → 1.1 with a hint of stretch (50-60 ms) */
+      /* 1. SELECTION: scale 1.0 → 1.15 with directional stretch + press ripple */
       var p = elapsed / PRESS_MS;
-      var s = 1 + 0.10 * p;
+      var s = 1 + 0.15 * p;
       cx = a.fromX; cy = a.fromY;
-      sx = s * (1 + 0.05 * p);
-      sy = s * (1 - 0.05 * p);
+      sx = s * (1 + 0.08 * p);
+      sy = s * (1 - 0.08 * p);
       rot = 0;
       alpha = 1;
+      /* expanding ripple ring under the pressed arrow */
+      ctx.save();
+      ctx.globalAlpha = (1 - p) * 0.35;
+      ctx.strokeStyle = palette.ring;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, u * (0.34 + p * 0.24), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
       drawArrowShadow(cx, cy, u);
       drawArrowShape(cx, cy, a.dir, u, palette.arrow, alpha, sx, sy, rot);
       return;
@@ -522,16 +569,16 @@
     cx = lerp(a.fromX, a.toX, e);
     cy = lerp(a.fromY, a.toY, e);
 
-    /* squash & stretch: stretched along motion at launch, settles as it exits */
-    var stretch = (1 - t) * 0.16;
+    /* squash & stretch: strong stretch along motion at launch, settles as it exits */
+    var stretch = (1 - t) * 0.28;
     sx = 1 + stretch + 0.03;
-    sy = 1 - stretch * 0.65;
+    sy = 1 - stretch * 0.6;
 
     /* slight natural rotation (2-5°), peaking mid-flight */
-    rot = Math.sin(t * Math.PI) * 0.055;
+    rot = Math.sin(t * Math.PI) * 0.06;
 
-    /* fade out during the final 15% */
-    alpha = 1 - Math.max(0, (t - 0.85)) * 6.6;
+    /* fade out only during the final 12% */
+    alpha = 1 - Math.max(0, (t - 0.88)) * 8.3;
 
     drawArrowShadow(cx, cy, u);
     drawBlurGhosts(a, cx, cy, a.dir, t, u, palette.arrow);
@@ -572,19 +619,35 @@
     var color = hinted ? palette.arrowHint : palette.arrow;
     var scale = 1;
 
-    /* chain-reaction glow: newly-unlocked arrows pulse once */
+    /* gentle breathing pulse on every currently-removable arrow */
+    var removable = isRemovable(x, y);
+    if (removable && !hinted) {
+      var idle = 0.5 + 0.5 * Math.sin(S.now * 3.2 + (x * 7 + y * 13));
+      scale *= 1 + idle * 0.05;
+    }
+
+    /* chain-reaction glow: newly-unlocked arrows pulse once with a ring + bounce */
     var gp = m.glowPulse;
     if (gp && S.now - gp < CHAIN_GLOW_MS) {
       var gt = (S.now - gp) / CHAIN_GLOW_MS;           /* 0 → 1 */
       var gv = Math.sin(gt * Math.PI);                 /* 0 → 1 → 0 */
       ctx.save();
-      ctx.globalAlpha = gv * 0.30;
+      /* outer pulsing ring */
+      ctx.globalAlpha = gv * 0.55;
+      ctx.strokeStyle = palette.glow;
+      ctx.lineWidth = 2.5 + gv * 4;
+      ctx.beginPath();
+      ctx.arc(cx, cy, c * (0.40 + gv * 0.20), 0, Math.PI * 2);
+      ctx.stroke();
+      /* inner glow fill */
+      ctx.globalAlpha = gv * 0.22;
       ctx.fillStyle = palette.glow;
       ctx.beginPath();
-      ctx.arc(cx, cy, c * 0.55, 0, Math.PI * 2);
+      ctx.arc(cx, cy, c * 0.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
-      scale *= 1 + gv * 0.10;
+      /* bounce up */
+      scale *= 1 + gv * 0.16;
     }
 
     if (m.flash > 0) {
@@ -630,11 +693,21 @@
       var p = parts[i];
       var t = p.age / p.life;
       ctx.save();
-      ctx.globalAlpha = (p.trail ? 0.6 : 1) * (1 - t);
-      ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * (1 - t * 0.6), 0, Math.PI * 2);
-      ctx.fill();
+      if (p.ring) {
+        /* expanding shockwave ring */
+        ctx.globalAlpha = (1 - t) * 0.55;
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = 2 + t * 4;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * (0.2 + t * 0.8), 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.globalAlpha = (p.trail ? 0.7 : 1) * (1 - t);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * (1 - t * 0.6), 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.restore();
     }
   }
@@ -657,13 +730,14 @@
         onSlideDone(a);
         continue;
       }
-      /* emit a short fading particle trail behind the moving arrow */
-      if (el > PRESS_MS) {
+      /* emit a short fading particle trail behind the moving arrow (every frame) */
+      if (el > PRESS_MS && !a.rev) {
         var t = (el - PRESS_MS) / TRAVEL_MS;
         var e = easeInCubic(clamp(t, 0, 1));
         var px = lerp(a.fromX, a.toX, e);
         var py = lerp(a.fromY, a.toY, e);
-        if (Math.random() < 0.65) spawnTrail(px, py, a.dir, board.cell);
+        spawnTrail(px, py, a.dir, board.cell);
+        if (Math.random() < 0.4) spawnTrail(px, py, a.dir, board.cell); /* second strand */
       }
     }
 

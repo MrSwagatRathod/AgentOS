@@ -107,8 +107,26 @@ body {
 
 .heart { display: inline-flex; transition: transform 0.25s ease; }
 .heart svg { fill: var(--danger); display: block; transition: fill 0.3s, opacity 0.3s, transform 0.3s; }
-.heart.lost svg { fill: #d5d5d5; opacity: 0.55; transform: scale(0.82); }
+.heart.lost svg {
+  fill: #d5d5d5;
+  opacity: 0.55;
+  animation: heart-lost 0.45s cubic-bezier(0.2, 1.6, 0.4, 1);
+  transform: scale(0.82);
+}
 [data-theme="dark"] .heart.lost svg { fill: #3a3a3e; }
+
+@keyframes heart-lost {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.4) rotate(-8deg); }
+  100% { transform: scale(0.82); }
+}
+
+#level-badge.bump { animation: badge-bump 0.32s cubic-bezier(0.2, 1.6, 0.4, 1); }
+@keyframes badge-bump {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.14); }
+  100% { transform: scale(1); }
+}
 
 .spacer { flex: 1; }
 
@@ -220,7 +238,7 @@ body {
   gap: 10px;
 }
 
-.brand-wrap { text-align: center; margin-top: 4vh; }
+.brand-wrap { text-align: center; margin-top: 4vh; animation: rise-in 0.55s cubic-bezier(0.2, 1.2, 0.3, 1) both; }
 
 h1.brand {
   font-size: 64px;
@@ -235,6 +253,7 @@ h1.brand {
   color: var(--muted);
   font-size: 15px;
   letter-spacing: 0.02em;
+  animation: fade-in 0.5s 0.1s ease both;
 }
 
 .start-actions {
@@ -244,6 +263,18 @@ h1.brand {
   width: 100%;
   max-width: 290px;
   align-items: stretch;
+  animation: rise-in 0.5s 0.15s cubic-bezier(0.2, 1.2, 0.3, 1) both;
+}
+
+.top-toggles { animation: fade-in 0.4s 0.25s ease both; }
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* ---------- cards / modals ---------- */

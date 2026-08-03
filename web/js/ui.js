@@ -8,6 +8,7 @@
 
   var E = {};
   var toastTimer = null;
+  var lastBadgeLevel = 0;
 
   function $(id) { return document.getElementById(id); }
 
@@ -173,8 +174,14 @@
     for (var i = 0; i < hearts.length; i++) {
       hearts[i].classList.toggle('lost', i >= S.hearts);
     }
-    /* level badge */
-    E['level-badge'].textContent = 'Level ' + S.level;
+    /* level badge (bump animation on change) */
+    if (S.level !== lastBadgeLevel) {
+      lastBadgeLevel = S.level;
+      E['level-badge'].textContent = 'Level ' + S.level;
+      E['level-badge'].classList.remove('bump');
+      void E['level-badge'].offsetWidth; /* restart CSS animation */
+      E['level-badge'].classList.add('bump');
+    }
     /* hint badge */
     E['hint-count'].textContent = S.hintsLeft;
     E['btn-hint'].classList.toggle('disabled', S.hintsLeft <= 0 || S.now < S.hintCooldownUntil);

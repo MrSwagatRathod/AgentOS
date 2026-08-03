@@ -189,10 +189,10 @@ AO.Game.startLevel(1);
   runFrames(40); // let the slide animation finish
   check('slide anim completes -> cell gone', S.cells[first.y][first.x].state === 'gone');
 
-  // undo restores it
+  // undo restores it (animated slide-back)
   AO.Game.undo();
   check('undo restores arrow', S.grid[first.y][first.x] === first.dir && S.removed === 0);
-  runFrames(5);
+  runFrames(25); /* let the slide-back animation finish (220 ms) */
 
   // tap a blocked arrow -> heart lost
   const blocked = findBlockedCell();
