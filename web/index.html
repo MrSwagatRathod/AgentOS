@@ -140,11 +140,11 @@
           </button>
         </div>
         <ol class="rules">
-          <li>Each cell holds an <b>arrow</b> pointing in one direction.</li>
-          <li>Tap an arrow — it <b>slides off the board</b> if nothing blocks its path to the edge.</li>
+          <li>Each <b>arrow</b> is a winding path with a head at one end.</li>
+          <li>Tap an arrow — the <b>whole path slides out</b> in the direction its head points, if nothing blocks the way to the edge.</li>
           <li>Tap a blocked arrow and you <b>lose a heart</b> (5 per level).</li>
           <li>Clear every arrow to <b>win the level</b>. No timer — take your time.</li>
-          <li>Stuck? Use a <b>hint</b> — it highlights a safe arrow and its path in red.</li>
+          <li>Stuck? Use a <b>hint</b> — it highlights a safe arrow, its path, and its exit in red.</li>
         </ol>
         <div class="diagram">
           <div class="d-row">
@@ -180,10 +180,14 @@
     <div id="toast" class="toast hidden"></div>
   </div>
 
-  <script src="js/levels.js"></script>
+  <script src="js/puzzle.js"></script>
+  <script src="js/difficulty.js"></script>
+  <script src="js/hints.js"></script>
+  <script src="js/renderer.js"></script>
   <script src="js/audio.js"></script>
-  <script src="js/game.js"></script>
+  <script src="js/engine.js"></script>
   <script src="js/ui.js"></script>
+  <script src="js/game.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

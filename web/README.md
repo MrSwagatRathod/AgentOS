@@ -1,6 +1,6 @@
-# Arrow Escape — Web Game (MVP)
+# Arrow Escape — Web Game (Procedural Long-Arrow Puzzle System)
 
-A complete, self-contained HTML5 implementation of the *Arrows – Puzzle Escape* mechanics, built web-first (one codebase → web / PWA → wrapped apps later via Capacitor, per `../docs/MASTER_PLAN.md`).
+A production-grade, modular implementation of the *Arrows – Puzzle Escape* mechanic, built web-first (one codebase → web / PWA → wrapped apps later via Capacitor, per `../docs/MASTER_PLAN.md`).
 
 **Zero build step, zero dependencies, works from `file://` or any static server.**
 
@@ -15,47 +15,45 @@ Or just open `index.html` directly in a browser.
 
 ## What's implemented
 
-- ✅ **Minimalist UI matching "Arrows – Puzzle Escape" (Lessmore)**: thin black arrows on white, 5 red hearts, "Level N" indicator, red-highlighted hint paths, light + dark themes
-- ✅ **Shaped boards like the original**: rectangular early, then circular (11+), diamond (19+), heart (31+), knight (46+), cross (61+)
-- ✅ **Procedural level generator** (reverse-construction, **guaranteed solvable**) with a **steeper difficulty curve**:
-  - **More arrows**: level 1 has 6 arrows → level 10: 19 → level 30: 31 → level 60: 44 → level 100+: 64
-  - **More complexity every level**: board cells grow monotonically (3×3=9 → 4×4=16 → 5×5=25 → 6×6=36 → circle 8×8=44 → heart 8×8=52 → cross 9×9=65 → 9×9=81 → 10×10=100), density ramps within each band, and an **inward-direction bias** + **start-ratio filter** force deep dependency chains (fewer obvious first moves) as levels progress
-  - All 600+ levels still verified solvable by an independent exact solver
-- ✅ Core rules: tap an arrow → it slides out if its path to the edge is clear; blocked tap = lose a heart (5/level)
-- ✅ Hearts, hints (highlight safe arrow + its red path), undo (3/level), restart, next level
-- ✅ Win/lose flows, level select with progress + stars
-- ✅ **Premium exit animation stack** (~300 ms per move): press ripple + tap-scale 1.0→1.15 (60 ms select) → squash & stretch launch → ease-in-cubic acceleration (240 ms) → motion-blur ghosts + soft shadow + dense fading particle trail → pop burst + shockwave ring on exit → micro camera shake + haptic tick → newly-unlocked arrows **glow & pulse once** (chain-reaction feedback)
-- ✅ **More animations**: undo = animated slide-back into the cell (220 ms); removable arrows gently "breathe" (idle pulse); hearts pop & gray out on loss; level badge bumps on level change; start screen rises/fades in
-- ✅ Haptics (navigator.vibrate): tick on remove, strong buzz on wrong tap, pattern on win
-- ✅ Sounds: soft "whoosh" on launch, "pop" on exit, error/heart-loss/win/undo/hint (all synthesized)
-- ✅ Canvas rendering with juice: slide animations, particles, screen shake, red flash, win confetti
-- ✅ Synthesized WebAudio sounds (no audio files), mute toggle
-- ✅ Touch + mouse + keyboard (H hint · U undo · R restart · M sound · T theme)
-- ✅ Progress persisted in localStorage; deterministic levels (same level number = same board — future daily-challenge ready)
-- ✅ PWA: manifest + service worker (offline installable), generated 192/512 PNG icons (white bg, black arrow, red heart)
-- ✅ `tools/render-preview.py` — renders UI mockups of any level for visual verification
+**Modular architecture (single responsibility per module):**
 
-## Code layout
+| Module | File | Responsibility |
+|---|---|---|
+| `AO.RNG` | `js/puzzle.js` | seeded deterministic PRNG (mulberry32) + helpers |
+| `AO.Board` | `js/puzzle.js` | board layout engine — occupancy (EMPTY / arrow-id / WALL), head-ray queries, shaped boards (rect/circle/heart/cross/diamond/knight) |
+| `AO.Paths` | `js/puzzle.js` | long-arrow path generator — random walk (90° turns, ≥2-cell segments, no 180° reversals, no self-intersection) + tail extension |
+| `AO.Puzzle` | `js/puzzle.js` | puzzle generator — **dependency-first reverse construction** + filler pass; `validateSolvable` / `validateNoOverlap` |
+| `AO.DependencyGraph` | `js/puzzle.js` | deps/dependents derived from the layout (X depends on Y ⇔ Y blocks X's head ray); DAG by construction; chain-depth metric |
+| `AO.Difficulty` | `js/difficulty.js` | difficulty manager — board size, fill, arrow length range, start-ratio target per level |
+| `AO.Hints` | `js/hints.js` | hint engine — earliest arrow in solution order still on the board |
+| `AO.Renderer` | `js/renderer.js` | vector renderer — rounded-corner polylines, filled symmetric arrowheads, soft shadows, dashed hint rays (no sprites) |
+| `AO.Engine` | `js/engine.js` | animation engine + state machine + pooled particles + input |
+| `AO.Game` | `js/game.js` | facade for UI / keyboard / tests |
 
-| File | Purpose |
-|---|---|
-| `index.html` | Shell, HUD, screens/modals (inline SVG icons) |
-| `css/style.css` | Design system: dark/light themes, cards, buttons, level grid |
-| `js/levels.js` | **Pure** generator + solver (no DOM — Node-testable) |
-| `js/audio.js` | WebAudio synth SFX |
-| `js/game.js` | Canvas engine: state machine, rendering, animations, input |
-| `js/ui.js` | DOM screens, modals, HUD, theme/sound toggles |
-| `js/main.js` | Boot, localStorage store, keyboard shortcuts, SW registration |
-| `sw.js`, `manifest.webmanifest`, `favicon.svg`, `assets/` | PWA + icons |
-| `tools/gen-icon.js` | Pure-Node PNG icon generator (zlib + manual PNG encoding) |
-| `test/levels.test.js` | Solvability/determinism/perf tests for the generator |
-| `test/game.smoke.test.js` | Full game smoke test (mocked DOM/canvas): tap/heart/undo/hint/win/lose/persistence |
+**Gameplay (long arrows):**
+- Arrows are **winding multi-cell paths** (3–4 cells early → 8–16 later) with a filled head at one end
+- Tap → the **whole path rigidly slides out** along the head direction if its head ray to the board edge is clear; wrong tap costs a heart (5 per level)
+- Each level is a **dependency graph**: arrow X depends on every arrow whose cells block X's head ray — the puzzle is finding removable arrows (no dead ends: removability is monotone)
+
+**Generation guarantees (tested):**
+- **Always solvable** — reverse-construction invariant + exact simulation validation
+- **No overlaps / out-of-bounds / wall cells** — collision-checked occupancy
+- **Deterministic** — same level number → identical puzzle (daily-challenge ready)
+- **~89–92% of cells filled**, minimum 80% across 400 levels
+- **Difficulty grows on 3 axes**: bigger boards (9 → 100 cells, monotonic), longer arrows (avg 2.4 → 7.7), deeper dependency chains (chain-bias placement links each new arrow into the previous arrow's head ray)
+- Chain-reaction placement deliberately creates dependencies instead of leaving them to chance
+
+**Premium exit animation (~300 ms):** press phase (head scales up) → whole path accelerates (ease-in-cubic) → motion-blur ghosts + particle trail along the entire path → pop burst + shockwave ring at the exit → micro shake + haptic tick → dependents **glow & pulse** (chain reaction). Undo = animated slide-back. Sounds: whoosh, pop, error, win, hint (all synthesized WebAudio, no files).
+
+**Also:** hearts (5), hints (3), undo (3), level select with stars, light/dark themes, PWA (offline, installable), keyboard shortcuts (H/U/R/M/T), localStorage persistence, `tools/render-preview.py` for visual verification.
 
 ## Run the tests
 
 ```bash
-node test/levels.test.js      # generator correctness: 600 levels exact-solved, determinism, perf
-node test/game.smoke.test.js  # boots the real game in a mock DOM and plays through it
+node test/levels.test.js        # puzzle core: solvability, no-overlap, fill, chains, determinism, perf
+node test/game.smoke.test.js    # full engine: boot, tap, hearts, undo, hint, win/lose, persistence
+node test/animation.test.js     # exit sequence: press → travel → pop → chain-glow → undo slide-back
+node test/directions.test.js    # arrows exit in all 4 directions
 ```
 
 ## Next steps (per master plan)
