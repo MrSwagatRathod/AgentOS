@@ -94,6 +94,7 @@
   var flash = 0;        // 0..1 red flash
   var lastTs = 0;
   var demoBoard = null; // decorative board on menu
+  var debugSlideDraws = 0; // frames where a sliding arrow was actually drawn (testing)
 
   /* ---------- helpers ---------- */
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
@@ -154,6 +155,7 @@
     S.hintArrow = null;
     S.winAt = 0;
     S.loseAt = 0;
+    debugSlideDraws = 0;
     S.cells = [];
     for (var y = 0; y < S.size; y++) {
       var row = [];
@@ -602,14 +604,21 @@
     ctx.lineWidth = 1;
     ctx.strokeRect(cx - s / 2, cy - s / 2, s, s);
 
-    if (m.state === 'gone' || dir === EMPTY) return;
+    if (m.state === 'gone') return;
 
-    /* sliding arrow — full press/launch/travel sequence */
+    /* sliding arrow — full press/launch/travel sequence.
+     * NOTE: this MUST be checked before `dir === EMPTY`, because during a slide
+     * the grid cell was already cleared (EMPTY) — the anim owns the drawing. */
     if (m.state === 'sliding') {
       var a = animsByCell[x + ',' + y];
-      if (a) drawSliding(x, y, a);
+      if (a) {
+        drawSliding(x, y, a);
+        debugSlideDraws++;
+      }
       return;
     }
+
+    if (dir === EMPTY) return;
 
     /* idle arrow */
     var hinted = S.hintArrow && S.hintArrow.x === x && S.hintArrow.y === y && S.now < S.hintUntil;
@@ -828,6 +837,7 @@
     getState: function () { return S; },
     debugAnims: function () { return anims; },
     debugParts: function () { return parts; },
+    debugSlideDraws: function () { return debugSlideDraws; },
     setup: setup,
     MAX_HEARTS: MAX_HEARTS
   };
