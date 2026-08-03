@@ -169,5 +169,30 @@ console.log('Levels library loaded. Running generator + solver tests...\n');
   check('level 100 has >= 55 arrows', counts[100] >= 55, counts[100]);
 }
 
+// 8) Fill guarantee: ~90% of every board's cells are filled with arrows
+{
+  console.log('[8] Fill guarantee — 90% of cells filled with arrows');
+  let minFill = 1, maxFill = 0, totalFill = 0, n = 0, under = 0;
+  for (let lvl = 1; lvl <= 400; lvl++) {
+    const lv = L.buildLevel(lvl);
+    const arrows = L.countArrows(lv.grid);
+    const cells = L.playableCount(lv.mask);
+    const fill = arrows / cells;
+    totalFill += fill; n++;
+    if (fill < minFill) minFill = fill;
+    if (fill > maxFill) maxFill = fill;
+    if (fill < 0.85) under++;
+  }
+  check('every level >= 85% filled', under === 0, under + ' levels under 85%');
+  check('min fill across 400 levels >= 0.85', minFill >= 0.85, 'min ' + minFill.toFixed(3));
+  check('average fill ≈ 90% (' + (totalFill / n * 100).toFixed(1) + '%)',
+    Math.abs(totalFill / n - 0.90) < 0.03);
+  /* spot-check the two extremes the user cares about */
+  const l1 = L.buildLevel(1), l100 = L.buildLevel(100);
+  check('level 1: 3x3 has 8 arrows (89% of 9 cells)', L.countArrows(l1.grid) >= 8, L.countArrows(l1.grid));
+  check('level 100: 10x10 has 90 arrows (90% of 100 cells)',
+    L.countArrows(l100.grid) >= 89 && L.playableCount(l100.mask) === 100, L.countArrows(l100.grid));
+}
+
 console.log('\n' + (failures === 0 ? 'ALL TESTS PASSED ✔' : failures + ' FAILURES ✘'));
 process.exit(failures === 0 ? 0 : 1);

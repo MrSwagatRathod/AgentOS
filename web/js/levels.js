@@ -247,22 +247,51 @@
     return n;
   }
 
+  /* ---------- sweep orders ---------- */
+  /* Order playable cells so that, when arrows are placed in this order, every
+   * cell always has at least one direction whose ray is clear of already-placed
+   * arrows — which guarantees very high fill (up to 100%) while keeping the
+   * board solvable (reverse placement = valid removal order).
+   *   row/col/diag families → arrows flow to one pair of edges (removal sweeps)
+   *   ringIn  (center outward) → arrows point outward (removal: edge → center)
+   *   ringOut (edge inward)    → arrows point inward  (removal: center → edge)
+   */
+  function orderCells(cells, size, mode) {
+    var cx = (size - 1) / 2, cy = (size - 1) / 2;
+    function ringKey(c) {
+      var r = Math.max(Math.abs(c.x - cx), Math.abs(c.y - cy));
+      return r * 4096 + (c.x * 17 + c.y * 13); /* within-ring tie-break */
+    }
+    var key;
+    switch (mode) {
+      case 'row':     key = function (c) { return c.y * size + c.x; }; break;
+      case 'rowRev':  key = function (c) { return (size - 1 - c.y) * size + (size - 1 - c.x); }; break;
+      case 'col':     key = function (c) { return c.x * size + c.y; }; break;
+      case 'colRev':  key = function (c) { return (size - 1 - c.x) * size + (size - 1 - c.y); }; break;
+      case 'diag':    key = function (c) { return (c.x + c.y) * size + c.x; }; break;
+      case 'diagRev': key = function (c) { return (2 * size - 2 - c.x - c.y) * size + (size - 1 - c.x); }; break;
+      case 'ringIn':  key = ringKey; break;
+      case 'ringOut': key = function (c) { return -ringKey(c); }; break;
+      default:        key = function (c) { return c.y * size + c.x; };
+    }
+    return cells.slice().sort(function (a, b) { return key(a) - key(b); });
+  }
+
   /* ---------- generator ---------- */
-  /* Reverse-construction generator. Always solvable.
-   * Only playable (non-wall) cells receive arrows; walls act as exit edges.
-   *
-   * Two complexity levers:
-   *   1. INWARD DIRECTION BIAS (`opts.inwardBias`): when placing an arrow we try
-   *      directions pointing toward the board center first. Inward-pointing
-   *      arrows are naturally blocked at the start of the level, so fewer
-   *      arrows are instantly removable => deeper dependency chains.
-   *   2. START-RATIO FILTER (`opts.maxStartRatio`): if too many arrows are
-   *      removable at the start (ratio = startRemovable / total), re-roll with
-   *      a derived seed (bounded retries). */
+  /* Reverse-construction generator with sweep orders. Always solvable:
+   *   - pick exactly `density` (e.g. 0.90) of the playable cells to fill,
+   *   - place arrows in a sweep order; each arrow points in a direction whose
+   *     ray is clear of already-placed arrows,
+   *   - reversing the placement order yields a valid removal sequence.
+   * Complexity: `maxStartRatio` bounds how many arrows are removable at the
+   * START (ratio = startRemovable / total); on exceed, re-roll with a fresh
+   * seed and the next sweep mode (bounded retries). */
   function generate(size, density, seed, shape, opts) {
     opts = opts || {};
     var tries = opts._tries || 0;
-    var bias = opts.inwardBias || 0;
+    var modes = opts.modes || ['row'];
+    var modeIdx = opts._modeIdx || 0;
+    var mode = modes[modeIdx % modes.length];
     var rng = mulberry32(seed);
     var mask = makeMask(size, shape || 'rect');
     var grid = emptyGrid(size);
@@ -270,52 +299,41 @@
       for (var x = 0; x < size; x++)
         if (!mask[y][x]) grid[y][x] = WALL;
 
-    var placement = []; /* {x,y,dir} in placement order (= reverse removal order) */
-    var playable = playableCount(mask);
-    var target = Math.round(playable * density);
-    var minArrows = Math.min(target, Math.max(3, Math.floor(playable * 0.45)));
-    var ccx = (size - 1) / 2, ccy = (size - 1) / 2;
-
-    /* pool of empty playable cells */
-    var empty = [];
+    var playable = [];
     for (var yy = 0; yy < size; yy++)
       for (var xx = 0; xx < size; xx++)
-        if (mask[yy][xx]) empty.push({ x: xx, y: yy });
-    shuffle(empty, rng);
+        if (mask[yy][xx]) playable.push({ x: xx, y: yy });
 
-    var attempts = 0;
-    while (placement.length < target && empty.length > 0 && attempts++ < 8000) {
-      var cell = empty.pop();
-      var dirs = [UP, RIGHT, DOWN, LEFT];
-      /* sort directions: strongest "toward center" first */
-      if (bias > 0) {
-        dirs.sort(function (a, b) {
-          var wa = 1 + bias * Math.max(0, (ccx - cell.x) * DX[a] + (ccy - cell.y) * DY[a]) / (size / 2);
-          var wb = 1 + bias * Math.max(0, (ccx - cell.x) * DX[b] + (ccy - cell.y) * DY[b]) / (size / 2);
-          return wb - wa;
-        });
-      } else {
-        shuffle(dirs, rng);
-      }
-      var placedDir = -1;
-      for (var i = 0; i < dirs.length; i++) {
-        if (pathClear(grid, size, cell.x, cell.y, dirs[i])) { placedDir = dirs[i]; break; }
-      }
-      if (placedDir === -1) continue; /* permanently blocked — already dropped from pool */
-      grid[cell.y][cell.x] = placedDir;
-      placement.push({ x: cell.x, y: cell.y, dir: placedDir });
+    var target = Math.round(playable.length * density);
+    var minArrows = Math.min(target, Math.max(3, Math.floor(playable.length * 0.4)));
+
+    /* which cells to fill (exactly `target`), then the sweep placement order */
+    var chosen = shuffle(playable.slice(), rng).slice(0, target);
+    var order = orderCells(chosen, size, mode);
+
+    var placement = []; /* {x,y,dir} in placement order (= reverse removal order) */
+    for (var i = 0; i < order.length; i++) {
+      var cell = order[i];
+      var valid = [];
+      for (var d = 0; d < 4; d++)
+        if (pathClear(grid, size, cell.x, cell.y, d)) valid.push(d);
+      if (!valid.length) continue; /* rare with sweep orders — cell stays empty */
+      var dir = valid[Math.floor(rng() * valid.length)];
+      grid[cell.y][cell.x] = dir;
+      placement.push({ x: cell.x, y: cell.y, dir: dir });
     }
 
-    /* too sparse (density target not reached) — retry with lower density, bounded */
-    if (placement.length < minArrows && tries < 16) {
-      return generate(size, Math.max(0.40, density - 0.02), (seed * 2654435761 + 97) >>> 0, shape,
-        { _tries: tries + 1, maxStartRatio: opts.maxStartRatio, maxTries: opts.maxTries, inwardBias: bias });
-    }
-    if (placement.length < 2) {
-      /* last-resort safety: never return an unplayable board */
-      return generate(size, Math.max(0.40, density - 0.05), (seed * 2654435761 + 97) >>> 0, shape,
-        { _tries: tries + 1, maxStartRatio: opts.maxStartRatio, maxTries: opts.maxTries, inwardBias: bias });
-    }
+    var retry = function () {
+      return generate(size, density, (seed * 2654435761 + 97) >>> 0, shape, {
+        _tries: tries + 1,
+        _modeIdx: modeIdx + 1,
+        modes: modes,
+        maxStartRatio: opts.maxStartRatio,
+        maxTries: opts.maxTries
+      });
+    };
+
+    if (placement.length < minArrows) return retry();
 
     var board = {
       size: size,
@@ -326,39 +344,35 @@
     };
 
     /* complexity filter: too many instantly-removable arrows = trivial level */
-    if (opts.maxStartRatio != null && tries < (opts.maxTries || 14)) {
-      var startRemovable = removableArrows(grid, size).length;
-      if (startRemovable / placement.length > opts.maxStartRatio) {
-        return generate(size, density, (seed * 2654435761 + 97) >>> 0, shape,
-          { _tries: tries + 1, maxStartRatio: opts.maxStartRatio, maxTries: opts.maxTries, inwardBias: bias });
-      }
+    if (opts.maxStartRatio != null && tries < (opts.maxTries || 10)) {
+      var ratio = removableArrows(grid, size).length / placement.length;
+      if (ratio > opts.maxStartRatio) return retry();
     }
 
     return board;
   }
 
   /* Difficulty curve by level number.
-   * - Board sizes/shapes are ordered so PLAYABLE CELLS GROW every level:
+   * - Board sizes/shapes ordered so PLAYABLE CELLS GROW every level:
    *   3x3(9) → 4x4(16) → 5x5(25) → 6x6(36) → circle8(44) → heart8(52) →
    *   cross9(65) → rect9(81) → rect10(100)
-   * - Density ramps WITHIN each band so every consecutive level is denser
-   *   (more arrows each level), staying below each board's fill saturation.
-   * - inwardBias ≈ 0.6 makes most arrows point inward => few obvious first
-   *   moves; maxStartRatio shrinks over time => deeper dependency chains. */
+   * - density = 0.90: 90% of every board's cells are filled with arrows.
+   * - Sweep modes rotate for variety; later bands include the harder inward
+   *   (ringOut) construction. maxStartRatio shrinks over time => fewer obvious
+   *   first moves => deeper dependency chains. */
   function levelParams(level) {
-    /* maxStartRatio values are calibrated to what inward-bias construction can
-     * actually achieve (bigger boards have a higher structural floor). */
-    if (level < 3)   return { size: 3, shape: 'rect', density: 0.72 + (level - 1) * 0.06, maxStartRatio: 0.50 };
-    if (level < 6)   return { size: 4, shape: 'rect', density: 0.70 + (level - 3) * 0.02, maxStartRatio: 0.40 };
-    if (level < 11)  return { size: 5, shape: 'rect', density: 0.68 + (level - 6) * 0.015, maxStartRatio: 0.38 };
-    if (level < 19)  return { size: 6, shape: 'rect', density: 0.66 + (level - 11) * 0.01, maxStartRatio: 0.36 };
-    if (level < 31)  return { size: 8, shape: 'circle', density: 0.64 + (level - 19) * 0.006, maxStartRatio: 0.35 };
-    if (level < 46)  return { size: 8, shape: 'heart', density: 0.62 + (level - 31) * 0.005, maxStartRatio: 0.34 };
-    if (level < 61)  return { size: 9, shape: 'cross', density: 0.62 + (level - 46) * 0.004, maxStartRatio: 0.34 };
-    if (level < 81)  return { size: 9, shape: 'rect', density: 0.63 + (level - 61) * 0.003, maxStartRatio: 0.37 };
-    if (level < 101) return { size: 10, shape: 'rect', density: 0.61 + (level - 81) * 0.002, maxStartRatio: 0.40 };
-    return { size: 10, shape: 'rect', density: Math.min(0.64, 0.63 + Math.floor((level - 100) / 20) * 0.004),
-             maxStartRatio: 0.39 };
+    var easy = ['row', 'rowRev', 'col', 'colRev', 'diag', 'diagRev'];
+    var hard = ['rowRev', 'colRev', 'diagRev', 'ringIn', 'ringOut', 'ringOut'];
+    if (level < 3)   return { size: 3, shape: 'rect', density: 0.88, maxStartRatio: 0.55, modes: easy };
+    if (level < 6)   return { size: 4, shape: 'rect', density: 0.90, maxStartRatio: 0.48, modes: easy };
+    if (level < 11)  return { size: 5, shape: 'rect', density: 0.90, maxStartRatio: 0.40, modes: easy };
+    if (level < 19)  return { size: 6, shape: 'rect', density: 0.90, maxStartRatio: 0.34, modes: easy };
+    if (level < 31)  return { size: 8, shape: 'circle', density: 0.90, maxStartRatio: 0.32, modes: easy };
+    if (level < 46)  return { size: 8, shape: 'heart', density: 0.90, maxStartRatio: 0.30, modes: easy };
+    if (level < 61)  return { size: 9, shape: 'cross', density: 0.90, maxStartRatio: 0.28, modes: hard };
+    if (level < 81)  return { size: 9, shape: 'rect', density: 0.90, maxStartRatio: 0.26, modes: hard };
+    if (level < 101) return { size: 10, shape: 'rect', density: 0.90, maxStartRatio: 0.24, modes: hard };
+    return { size: 10, shape: 'rect', density: 0.90, maxStartRatio: 0.22, modes: hard };
   }
 
   function hashStr(s) {
@@ -370,8 +384,9 @@
   function buildLevel(level) {
     var p = levelParams(level);
     var seed = (level * 2654435761) ^ (p.size * 48271) ^ hashStr(p.shape) ^ Math.round(p.density * 1000);
+    var mode = p.modes[(level - 1) % p.modes.length];
     return generate(p.size, p.density, seed >>> 0, p.shape,
-      { maxStartRatio: p.maxStartRatio, maxTries: 14, inwardBias: 0.6 });
+      { sweepMode: mode, modes: p.modes, maxStartRatio: p.maxStartRatio, maxTries: 10 });
   }
 
   /* Next arrow to remove per the known solution (used by the hint system) */
@@ -398,6 +413,7 @@
     solveAny: solveAny,
     validateSolution: validateSolution,
     generate: generate,
+    orderCells: orderCells,
     levelParams: levelParams,
     buildLevel: buildLevel,
     nextSolutionArrow: nextSolutionArrow,
